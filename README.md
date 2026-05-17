@@ -18,7 +18,7 @@ IBKR remains a stronger choice if you need broader global market access or more 
 - Fetches daily historical data from Alpaca Market Data.
 - Runs an ETF momentum and trend-following strategy with a defensive regime.
 - Uses walk-forward parameter selection instead of full-sample parameter fitting.
-- Optionally overlays company, index, and ETF research onto the signal engine.
+- Optionally overlays company, index, ETF, and official-source news context onto the signal engine.
 - Generates target portfolio weights for the current session.
 - Rebalances an Alpaca account with guardrails:
   - paper trading by default
@@ -73,6 +73,11 @@ Pure quant is not enough if your goal is to approximate an institutional decisio
   - tracking error
   - recent flows
   - look-through portfolio quality and valuation
+- Official-source news analysis:
+  - SEC EDGAR filing flow for equity names in the snapshot
+  - Federal Reserve press releases / RSS
+  - BLS latest economic releases
+  - Treasury press releases relevant to issuance and funding conditions
 
 The engine blends these with quant instead of replacing quant. The overlay is applied to both risk-on and defensive selection. In practice, that means:
 
@@ -80,6 +85,7 @@ The engine blends these with quant instead of replacing quant. The overlay is ap
 2. Index analysis tells you whether the backdrop supports taking risk.
 3. Company analysis tells you whether an individual equity deserves capital.
 4. ETF analysis tells you whether the wrapper is efficient enough to use.
+5. Official-source news tells you whether fresh macro or filing developments should lean the system more risk-on, more defensive, or more cautious.
 
 This is closer to how large investment firms think, but it is still a compact retail implementation. It is not equivalent to a real institutional platform with dedicated macro teams, fundamental analysts, alternative data, private research feeds, and execution infrastructure.
 
@@ -100,6 +106,8 @@ PYTHONPATH=src python3 -m ai_investing.cli signal --research-snapshot examples/r
 PYTHONPATH=src python3 -m ai_investing.cli trade --research-snapshot examples/research_snapshot.example.json
 ```
 
+Official-source news is enabled by default for `research`, `signal`, and `trade`. It is intentionally not used in `backtest`, because current news would create lookahead bias in historical results.
+
 You can also broaden the universe beyond ETFs. For example:
 
 ```bash
@@ -109,6 +117,8 @@ export AI_INVESTING_RISK_ON=SPY,QQQ,MSFT,NVDA,AMZN
 If you do that, provide company metrics for those equities in the research snapshot.
 
 ## Quick Start
+
+If you want a step-by-step operator guide, read [HOW_TO_USE.md](/Users/rishik/AI-Investing/HOW_TO_USE.md:1).
 
 1. Create an Alpaca account and generate API credentials.
 2. Copy `.env.example` to your own environment file and set the values.
@@ -152,6 +162,8 @@ Before submission, the system checks that:
 - the rebalance fits within buying power and expected sell proceeds
 - any partially submitted rebalance is resumed instead of duplicated
 
+The live-oriented commands also print an `Official News Context` section so you can see which reliable sources were ingested and what macro bucket scores they produced.
+
 ### Enable Live Trading
 
 Live trading requires both:
@@ -188,6 +200,7 @@ Example cron schedule for weekday runs at 9:40am New York time:
 - Market data access still requires Alpaca API credentials in this implementation.
 - The pre-trade drift guard uses latest trade prices, not full order book simulation.
 - The research overlay is point-in-time. Historical backtesting of fundamentals, macro, and ETF structure requires properly time-aligned historical snapshots to avoid lookahead bias.
+- The latest-news layer is heuristic. It uses official primary sources, but it is not a substitute for full discretionary event interpretation by a human or an institutional macro desk.
 
 ## References
 
@@ -196,6 +209,13 @@ Example cron schedule for weekday runs at 9:40am New York time:
 - Alpaca SDKs and tools: https://docs.alpaca.markets/us/docs/sdks-and-tools
 - SEC developer resources: https://www.sec.gov/about/developer-resources
 - SEC EDGAR data APIs: https://data.sec.gov/
+- SEC developer FAQ / declared User-Agent guidance: https://www.sec.gov/about/webmaster-frequently-asked-questions
+- Federal Reserve RSS feeds: https://www.federalreserve.gov/feeds/feeds.htm
+- Federal Reserve press releases: https://www.federalreserve.gov/newsevents/pressreleases.htm
+- BLS latest releases: https://www.bls.gov/home.htm
+- BLS CPI release page: https://www.bls.gov/cpi/
+- BLS PPI release page: https://www.bls.gov/ppi/home.htm
+- Treasury press releases: https://home.treasury.gov/news/press-releases
 - FRED API: https://fred.stlouisfed.org/docs/api/fred/fred/
 - Alpaca automated trading risk disclosure: https://files.alpaca.markets/disclosures/library/RisksAutoTrading.pdf
 - IBKR API overview: https://www.interactivebrokers.com/en/trading/ib-api.php?menu=A

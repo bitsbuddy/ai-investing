@@ -46,12 +46,16 @@ class BrokerConfig:
 @dataclass(frozen=True)
 class RuntimeConfig:
     enable_live: bool
+    enable_official_news: bool
     state_path: Path
     default_feed: str
     risk_on_universe: tuple[str, ...]
     defensive_universe: tuple[str, ...]
     research_snapshot_path: Path | None
     research_max_age_days: int
+    official_news_lookback_days: int
+    require_official_news: bool
+    sec_user_agent: str
     max_price_drift_pct: float
 
 
@@ -78,6 +82,7 @@ def load_runtime_config() -> RuntimeConfig:
     research_snapshot_raw = os.getenv("AI_INVESTING_RESEARCH_SNAPSHOT_PATH", "").strip()
     return RuntimeConfig(
         enable_live=_bool_env("AI_INVESTING_ENABLE_LIVE", False),
+        enable_official_news=_bool_env("AI_INVESTING_ENABLE_OFFICIAL_NEWS", True),
         state_path=Path(
             os.getenv("AI_INVESTING_STATE_PATH", ".ai_investing_state.json")
         ),
@@ -92,6 +97,17 @@ def load_runtime_config() -> RuntimeConfig:
             Path(research_snapshot_raw) if research_snapshot_raw else None
         ),
         research_max_age_days=_int_env("AI_INVESTING_RESEARCH_MAX_AGE_DAYS", 45),
+        official_news_lookback_days=_int_env(
+            "AI_INVESTING_OFFICIAL_NEWS_LOOKBACK_DAYS", 14
+        ),
+        require_official_news=_bool_env("AI_INVESTING_REQUIRE_OFFICIAL_NEWS", False),
+        sec_user_agent=(
+            os.getenv(
+                "AI_INVESTING_SEC_USER_AGENT",
+                "AI-Investing research@example.com",
+            ).strip()
+            or "AI-Investing research@example.com"
+        ),
         max_price_drift_pct=_float_env("AI_INVESTING_MAX_PRICE_DRIFT_PCT", 0.02),
     )
 

@@ -23,6 +23,7 @@ class ResearchWeights:
     company: float = 0.30
     index: float = 0.20
     etf: float = 0.15
+    news: float = 0.20
     minimum_total_score: float = 0.45
 
 
@@ -80,6 +81,30 @@ class ResearchSnapshot:
 
 
 @dataclass(frozen=True)
+class OfficialNewsItem:
+    source: str
+    published_on: date
+    title: str
+    url: str
+    impact_scores: dict[str, float] = field(default_factory=dict)
+    symbols: tuple[str, ...] = ()
+    summary: str | None = None
+
+
+@dataclass(frozen=True)
+class OfficialNewsContext:
+    as_of: date
+    lookback_days: int
+    risk_on_score: float | None = None
+    duration_score: float | None = None
+    cash_score: float | None = None
+    gold_score: float | None = None
+    company_scores: dict[str, float] = field(default_factory=dict)
+    items: tuple[OfficialNewsItem, ...] = ()
+    source_status: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class ResearchAssessment:
     symbol: str
     total_score: float
@@ -103,6 +128,7 @@ class Signal:
     weights: dict[str, float]
     diagnostics: dict[str, float | str] = field(default_factory=dict)
     assessments: dict[str, ResearchAssessment] = field(default_factory=dict)
+    official_news: OfficialNewsContext | None = None
 
 
 @dataclass(frozen=True)

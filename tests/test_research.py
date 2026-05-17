@@ -5,7 +5,11 @@ import unittest
 from datetime import date, timedelta
 from pathlib import Path
 
-from ai_investing.models import StrategyParameters
+from ai_investing.models import (
+    OfficialNewsContext,
+    OfficialNewsItem,
+    StrategyParameters,
+)
 from ai_investing.research import ResearchOverlay, load_research_snapshot
 from ai_investing.strategy import ETFMomentumStrategy, align_history
 
@@ -302,6 +306,73 @@ class ResearchTests(unittest.TestCase):
 
         self.assertEqual(signal.regime, "risk_off")
         self.assertEqual(signal.weights, {})
+
+    def test_overlay_can_include_official_news_component(self) -> None:
+        snapshot = """{
+  "as_of": "2026-05-17",
+  "weights": {
+    "quant": 0.35,
+    "company": 0.30,
+    "index": 0.20,
+    "etf": 0.15,
+    "minimum_total_score": 0.45
+  },
+  "assets": {
+    "SPY": {
+      "asset_type": "etf",
+      "benchmark_index": "SPX",
+      "etf": {
+        "expense_ratio": 0.0009,
+        "assets_under_management_billion": 500.0,
+        "average_daily_dollar_volume_billion": 25.0,
+        "tracking_error": 0.0007,
+        "flow_1m_percent": 0.01,
+        "flow_3m_percent": 0.02,
+        "portfolio_quality_score": 0.70,
+        "portfolio_valuation_score": 0.60
+      }
+    },
+    "SPX": {
+      "asset_type": "index",
+      "index": {
+        "breadth_percent_above_200dma": 0.65,
+        "trend_score": 0.72,
+        "relative_strength_score": 0.68,
+        "volatility_percentile": 0.40,
+        "credit_spread_percentile": 0.30,
+        "yield_curve_slope_bps": 30.0
+      }
+    }
+  }
+}"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "snapshot.json"
+            path.write_text(snapshot)
+            official_news = OfficialNewsContext(
+                as_of=date(2026, 5, 17),
+                lookback_days=14,
+                risk_on_score=0.30,
+                duration_score=0.60,
+                cash_score=0.55,
+                gold_score=0.50,
+                items=(
+                    OfficialNewsItem(
+                        source="bls",
+                        published_on=date(2026, 5, 13),
+                        title="PPI for final demand advances 1.4% in April",
+                        url="https://www.bls.gov/ppi/home.htm",
+                        impact_scores={"risk_on": 0.30},
+                    ),
+                ),
+            )
+            overlay = ResearchOverlay(
+                load_research_snapshot(path),
+                official_news=official_news,
+            )
+
+        assessment = overlay.assess_symbol("SPY", 0.70)
+        self.assertIn("news", assessment.component_scores)
+        self.assertLess(assessment.component_scores["news"], 0.5)
 
 
 if __name__ == "__main__":

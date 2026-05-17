@@ -4,10 +4,12 @@ import json
 from datetime import date, datetime
 from pathlib import Path
 
+from .news import score_official_news_for_asset
 from .models import (
     CompanyMetrics,
     ETFMetrics,
     IndexMetrics,
+    OfficialNewsContext,
     ResearchAsset,
     ResearchAssessment,
     ResearchSnapshot,
@@ -40,8 +42,14 @@ def load_research_snapshot(path: Path) -> ResearchSnapshot:
 
 
 class ResearchOverlay:
-    def __init__(self, snapshot: ResearchSnapshot) -> None:
+    def __init__(
+        self,
+        snapshot: ResearchSnapshot,
+        *,
+        official_news: OfficialNewsContext | None = None,
+    ) -> None:
         self.snapshot = snapshot
+        self.official_news = official_news
 
     def validate_for_date(self, decision_date: date, *, max_age_days: int) -> None:
         if self.snapshot.as_of > decision_date:
@@ -60,25 +68,18 @@ class ResearchOverlay:
         asset = self.snapshot.assets.get(symbol)
         notes: list[str] = []
         components = {"quant": _clamp01(quant_score)}
+        benchmark_index = asset.benchmark_index if asset is not None else None
+        asset_type = asset.asset_type if asset is not None else None
 
         if asset is None:
-            notes.append("No research snapshot entry; using quant only.")
-            total_score = self._blend(components)
-            return ResearchAssessment(
-                symbol=symbol,
-                total_score=total_score,
-                research_score=None,
-                component_scores=components,
-                notes=tuple(notes),
-            )
+            notes.append("No research snapshot entry; using quant and live official news only.")
 
-        if asset.company is not None:
+        if asset is not None and asset.company is not None:
             components["company"] = _score_company(asset.company)
-        if asset.etf is not None:
+        if asset is not None and asset.etf is not None:
             components["etf"] = _score_etf(asset.etf)
 
-        benchmark_index = asset.benchmark_index
-        if asset.index is not None:
+        if asset is not None and asset.index is not None:
             components["index"] = _score_index(asset.index)
         elif benchmark_index:
             benchmark_asset = self.snapshot.assets.get(benchmark_index)
@@ -88,6 +89,17 @@ class ResearchOverlay:
                 notes.append(
                     f"Missing index metrics for benchmark {benchmark_index}."
                 )
+
+        news_score = None
+        if self.official_news is not None:
+            news_score = score_official_news_for_asset(
+                self.official_news,
+                symbol=symbol,
+                asset_type=asset_type,
+                benchmark_index=benchmark_index,
+            )
+        if news_score is not None:
+            components["news"] = news_score
 
         total_score = self._blend(components)
         research_components = {
@@ -100,7 +112,7 @@ class ResearchOverlay:
                 self._blend(research_components) if research_components else None
             ),
             component_scores=components,
-            asset_type=asset.asset_type,
+            asset_type=asset_type,
             benchmark_index=benchmark_index,
             notes=tuple(notes),
         )
@@ -117,6 +129,7 @@ class ResearchOverlay:
             "company": self.snapshot.weights.company,
             "index": self.snapshot.weights.index,
             "etf": self.snapshot.weights.etf,
+            "news": self.snapshot.weights.news,
         }
         available = {
             component: raw_weights[component]

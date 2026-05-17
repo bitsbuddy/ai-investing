@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
@@ -16,7 +17,8 @@ from .config import (
     require_broker_credentials,
 )
 from .execution import execute_rebalance
-from .models import StrategyParameters
+from .models import OfficialNewsContext, ResearchSnapshot, ResearchWeights, StrategyParameters
+from .news import build_official_news_context, summarize_official_news
 from .research import ResearchOverlay, load_research_snapshot
 from .strategy import ETFMomentumStrategy, align_history
 
@@ -37,6 +39,9 @@ def build_parser() -> argparse.ArgumentParser:
     signal.add_argument("--feed", default=None)
     signal.add_argument("--research-snapshot", default=None)
     signal.add_argument("--training-window-bars", type=int, default=756)
+    signal.add_argument("--no-official-news", action="store_true")
+    signal.add_argument("--official-news-lookback-days", type=int, default=None)
+    signal.add_argument("--require-official-news", action="store_true")
 
     trade = subparsers.add_parser("trade", help="Preview or submit a rebalance.")
     trade.add_argument("--lookback-days", type=int, default=900)
@@ -45,6 +50,9 @@ def build_parser() -> argparse.ArgumentParser:
     trade.add_argument("--training-window-bars", type=int, default=756)
     trade.add_argument("--submit", action="store_true")
     trade.add_argument("--force", action="store_true")
+    trade.add_argument("--no-official-news", action="store_true")
+    trade.add_argument("--official-news-lookback-days", type=int, default=None)
+    trade.add_argument("--require-official-news", action="store_true")
 
     research = subparsers.add_parser(
         "research", help="Run multi-layer company/index/ETF analysis."
@@ -53,6 +61,9 @@ def build_parser() -> argparse.ArgumentParser:
     research.add_argument("--feed", default=None)
     research.add_argument("--research-snapshot", default=None)
     research.add_argument("--training-window-bars", type=int, default=756)
+    research.add_argument("--no-official-news", action="store_true")
+    research.add_argument("--official-news-lookback-days", type=int, default=None)
+    research.add_argument("--require-official-news", action="store_true")
 
     return parser
 
@@ -70,7 +81,7 @@ def main() -> None:
                 client, runtime_config, args, research_snapshot_path=research_snapshot_path
             )
             return
-        _run_snapshot_only_research(runtime_config, research_snapshot_path)
+        _run_snapshot_only_research(runtime_config, research_snapshot_path, args)
         return
 
     require_broker_credentials(broker_config)
@@ -143,6 +154,7 @@ def _run_signal_command(
     signal, _history, params, _signal_index = _compute_latest_signal(
         client=client,
         runtime_config=runtime_config,
+        args=args,
         lookback_days=args.lookback_days,
         feed=args.feed or runtime_config.default_feed,
         research_snapshot_path=_resolve_research_snapshot_path(runtime_config, args),
@@ -150,6 +162,7 @@ def _run_signal_command(
     )
     print(f"Using parameters: {params}")
     _print_signal(signal)
+    _print_official_news(signal.official_news)
     _print_selected_research(signal)
 
 
@@ -168,6 +181,7 @@ def _run_trade_command(
     signal, history, params, signal_index = _compute_latest_signal(
         client=client,
         runtime_config=runtime_config,
+        args=args,
         lookback_days=args.lookback_days,
         feed=args.feed or runtime_config.default_feed,
         research_snapshot_path=_resolve_research_snapshot_path(runtime_config, args),
@@ -191,6 +205,7 @@ def _run_trade_command(
 
     print(f"Using parameters: {params}")
     _print_signal(signal)
+    _print_official_news(signal.official_news)
     _print_selected_research(signal)
     print("")
     if not actions:
@@ -226,6 +241,7 @@ def _run_research_command(
     signal, _history, params, _signal_index = _compute_latest_signal(
         client=client,
         runtime_config=runtime_config,
+        args=args,
         lookback_days=args.lookback_days,
         feed=args.feed or runtime_config.default_feed,
         research_snapshot_path=research_snapshot_path,
@@ -233,20 +249,32 @@ def _run_research_command(
     )
     print(f"Using parameters: {params}")
     _print_signal(signal)
+    _print_official_news(signal.official_news)
     print("")
     print("Research Scorecard")
     _print_all_research(signal)
 
 
-def _run_snapshot_only_research(runtime_config, research_snapshot_path: Path | None) -> None:
+def _run_snapshot_only_research(
+    runtime_config,
+    research_snapshot_path: Path | None,
+    args: argparse.Namespace | None = None,
+) -> None:
     if research_snapshot_path is None:
         raise RuntimeError(
             "Research mode without broker credentials requires a local research snapshot."
         )
-    overlay = _load_research_overlay(research_snapshot_path)
+    snapshot = load_research_snapshot(research_snapshot_path)
+    official_news = _load_official_news_context(
+        runtime_config=runtime_config,
+        args=args,
+        snapshot=snapshot,
+    )
+    overlay = _build_research_overlay(snapshot, official_news)
     assert overlay is not None
     print("Mode: research snapshot only")
     print("Quant component: neutral 0.50")
+    _print_official_news(official_news)
     print("")
     assessments = [
         overlay.assess_symbol(symbol, 0.5)
@@ -261,6 +289,7 @@ def _run_snapshot_only_research(runtime_config, research_snapshot_path: Path | N
 def _compute_latest_signal(
     client: AlpacaClient,
     runtime_config,
+    args: argparse.Namespace,
     lookback_days: int,
     feed: str,
     research_snapshot_path: Path | None = None,
@@ -283,8 +312,18 @@ def _compute_latest_signal(
     signal_index = len(history.dates) - 1
     if history.dates[signal_index] >= _today_utc():
         signal_index -= 1
-    research_overlay = _load_research_overlay(research_snapshot_path)
-    if research_overlay is not None:
+    snapshot = (
+        load_research_snapshot(research_snapshot_path)
+        if research_snapshot_path is not None
+        else None
+    )
+    official_news = _load_official_news_context(
+        runtime_config=runtime_config,
+        args=args,
+        snapshot=snapshot,
+    )
+    research_overlay = _build_research_overlay(snapshot, official_news)
+    if snapshot is not None and research_overlay is not None:
         research_overlay.validate_for_date(
             history.dates[signal_index],
             max_age_days=runtime_config.research_max_age_days,
@@ -303,7 +342,7 @@ def _compute_latest_signal(
         params=best_result.params,
         research_overlay=research_overlay,
     )
-    signal = strategy.signal_for_index(history, signal_index)
+    signal = replace(strategy.signal_for_index(history, signal_index), official_news=official_news)
     return signal, history, best_result.params, signal_index
 
 
@@ -332,6 +371,25 @@ def _print_signal(signal) -> None:
         print(f"- {symbol}: {weight:.2%}")
     cash = 1.0 - sum(signal.weights.values())
     print(f"- CASH: {cash:.2%}")
+
+
+def _print_official_news(official_news: OfficialNewsContext | None) -> None:
+    if official_news is None:
+        return
+    print("")
+    print("Official News Context")
+    if official_news.risk_on_score is not None:
+        print(f"- Risk assets: {official_news.risk_on_score:.2f}")
+    if official_news.duration_score is not None:
+        print(f"- Duration: {official_news.duration_score:.2f}")
+    if official_news.cash_score is not None:
+        print(f"- Cash / short duration: {official_news.cash_score:.2f}")
+    if official_news.gold_score is not None:
+        print(f"- Gold: {official_news.gold_score:.2f}")
+    for source_name, status in sorted(official_news.source_status.items()):
+        print(f"- {source_name}: {status}")
+    for line in summarize_official_news(official_news, limit=4):
+        print(f"- headline: {line}")
 
 
 def _print_selected_research(signal) -> None:
@@ -382,13 +440,52 @@ def _format_assessment_line(assessment) -> str:
     )
 
 
-def _load_research_overlay(
-    research_snapshot_path: Path | None,
+def _build_research_overlay(
+    snapshot: ResearchSnapshot | None,
+    official_news: OfficialNewsContext | None,
 ) -> ResearchOverlay | None:
-    if research_snapshot_path is None:
+    if snapshot is None and official_news is None:
         return None
-    snapshot = load_research_snapshot(research_snapshot_path)
-    return ResearchOverlay(snapshot)
+    if snapshot is None:
+        snapshot = ResearchSnapshot(
+            as_of=official_news.as_of,
+            weights=ResearchWeights(
+                quant=0.80,
+                company=0.0,
+                index=0.0,
+                etf=0.0,
+                news=0.20,
+                minimum_total_score=0.35,
+            ),
+            assets={},
+        )
+    return ResearchOverlay(snapshot, official_news=official_news)
+
+
+def _load_official_news_context(
+    *,
+    runtime_config,
+    args: argparse.Namespace | None,
+    snapshot: ResearchSnapshot | None,
+) -> OfficialNewsContext | None:
+    if args is not None and getattr(args, "no_official_news", False):
+        return None
+    if not runtime_config.enable_official_news:
+        return None
+    lookback_days = (
+        getattr(args, "official_news_lookback_days", None)
+        or runtime_config.official_news_lookback_days
+    )
+    require_success = runtime_config.require_official_news or bool(
+        args is not None and getattr(args, "require_official_news", False)
+    )
+    return build_official_news_context(
+        as_of=_today_utc(),
+        lookback_days=lookback_days,
+        user_agent=runtime_config.sec_user_agent,
+        assets=snapshot.assets if snapshot is not None else None,
+        require_success=require_success,
+    )
 
 
 def _has_broker_credentials(broker_config) -> bool:
