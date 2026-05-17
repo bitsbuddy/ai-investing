@@ -1,0 +1,4 @@
+.ai_investing_state.json
+__pycache__/
+*.pyc
+logs/
