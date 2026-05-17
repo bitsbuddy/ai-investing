@@ -1,0 +1,253 @@
+{
+  "as_of": "2026-05-17",
+  "weights": {
+    "quant": 0.35,
+    "company": 0.30,
+    "index": 0.20,
+    "etf": 0.15,
+    "minimum_total_score": 0.45
+  },
+  "assets": {
+    "SPY": {
+      "asset_type": "etf",
+      "benchmark_index": "SPX",
+      "etf": {
+        "expense_ratio": 0.0009,
+        "assets_under_management_billion": 610.0,
+        "average_daily_dollar_volume_billion": 35.0,
+        "tracking_error": 0.0008,
+        "flow_1m_percent": 0.012,
+        "flow_3m_percent": 0.025,
+        "portfolio_quality_score": 0.72,
+        "portfolio_valuation_score": 0.56
+      }
+    },
+    "QQQ": {
+      "asset_type": "etf",
+      "benchmark_index": "NDX",
+      "etf": {
+        "expense_ratio": 0.0020,
+        "assets_under_management_billion": 340.0,
+        "average_daily_dollar_volume_billion": 18.0,
+        "tracking_error": 0.0015,
+        "flow_1m_percent": 0.008,
+        "flow_3m_percent": 0.020,
+        "portfolio_quality_score": 0.74,
+        "portfolio_valuation_score": 0.40
+      }
+    },
+    "IWM": {
+      "asset_type": "etf",
+      "benchmark_index": "RTY",
+      "etf": {
+        "expense_ratio": 0.0019,
+        "assets_under_management_billion": 65.0,
+        "average_daily_dollar_volume_billion": 7.0,
+        "tracking_error": 0.0020,
+        "flow_1m_percent": -0.006,
+        "flow_3m_percent": 0.003,
+        "portfolio_quality_score": 0.49,
+        "portfolio_valuation_score": 0.61
+      }
+    },
+    "EFA": {
+      "asset_type": "etf",
+      "benchmark_index": "MXEA",
+      "etf": {
+        "expense_ratio": 0.0032,
+        "assets_under_management_billion": 52.0,
+        "average_daily_dollar_volume_billion": 2.4,
+        "tracking_error": 0.0038,
+        "flow_1m_percent": 0.003,
+        "flow_3m_percent": 0.011,
+        "portfolio_quality_score": 0.57,
+        "portfolio_valuation_score": 0.66
+      }
+    },
+    "EEM": {
+      "asset_type": "etf",
+      "benchmark_index": "MXEF",
+      "etf": {
+        "expense_ratio": 0.0068,
+        "assets_under_management_billion": 22.0,
+        "average_daily_dollar_volume_billion": 1.7,
+        "tracking_error": 0.0055,
+        "flow_1m_percent": -0.012,
+        "flow_3m_percent": -0.018,
+        "portfolio_quality_score": 0.44,
+        "portfolio_valuation_score": 0.63
+      }
+    },
+    "TLT": {
+      "asset_type": "etf",
+      "benchmark_index": "UST20",
+      "etf": {
+        "expense_ratio": 0.0015,
+        "assets_under_management_billion": 53.0,
+        "average_daily_dollar_volume_billion": 5.4,
+        "tracking_error": 0.0012,
+        "flow_1m_percent": 0.007,
+        "flow_3m_percent": 0.018,
+        "portfolio_quality_score": 0.93,
+        "portfolio_valuation_score": 0.70
+      }
+    },
+    "IEF": {
+      "asset_type": "etf",
+      "benchmark_index": "UST7_10",
+      "etf": {
+        "expense_ratio": 0.0015,
+        "assets_under_management_billion": 18.0,
+        "average_daily_dollar_volume_billion": 0.9,
+        "tracking_error": 0.0010,
+        "flow_1m_percent": 0.006,
+        "flow_3m_percent": 0.012,
+        "portfolio_quality_score": 0.94,
+        "portfolio_valuation_score": 0.71
+      }
+    },
+    "GLD": {
+      "asset_type": "etf",
+      "benchmark_index": "GOLD",
+      "etf": {
+        "expense_ratio": 0.0040,
+        "assets_under_management_billion": 70.0,
+        "average_daily_dollar_volume_billion": 2.5,
+        "tracking_error": 0.0032,
+        "flow_1m_percent": 0.004,
+        "flow_3m_percent": 0.014,
+        "portfolio_quality_score": 0.75,
+        "portfolio_valuation_score": 0.58
+      }
+    },
+    "SHY": {
+      "asset_type": "etf",
+      "benchmark_index": "UST1_3",
+      "etf": {
+        "expense_ratio": 0.0015,
+        "assets_under_management_billion": 21.0,
+        "average_daily_dollar_volume_billion": 0.6,
+        "tracking_error": 0.0006,
+        "flow_1m_percent": 0.003,
+        "flow_3m_percent": 0.007,
+        "portfolio_quality_score": 0.95,
+        "portfolio_valuation_score": 0.73
+      }
+    },
+    "MSFT": {
+      "asset_type": "equity",
+      "benchmark_index": "NDX",
+      "company": {
+        "revenue_growth": 0.14,
+        "earnings_growth": 0.16,
+        "gross_margin": 0.69,
+        "free_cash_flow_margin": 0.33,
+        "return_on_equity": 0.31,
+        "debt_to_equity": 0.35,
+        "net_debt_to_ebitda": 0.20,
+        "interest_coverage": 18.0,
+        "pe_ratio": 31.0,
+        "ev_to_ebitda": 22.0
+      }
+    },
+    "SPX": {
+      "asset_type": "index",
+      "index": {
+        "breadth_percent_above_200dma": 0.64,
+        "trend_score": 0.72,
+        "relative_strength_score": 0.68,
+        "volatility_percentile": 0.42,
+        "credit_spread_percentile": 0.35,
+        "yield_curve_slope_bps": 35.0
+      }
+    },
+    "NDX": {
+      "asset_type": "index",
+      "index": {
+        "breadth_percent_above_200dma": 0.58,
+        "trend_score": 0.77,
+        "relative_strength_score": 0.74,
+        "volatility_percentile": 0.51,
+        "credit_spread_percentile": 0.36,
+        "yield_curve_slope_bps": 35.0
+      }
+    },
+    "RTY": {
+      "asset_type": "index",
+      "index": {
+        "breadth_percent_above_200dma": 0.46,
+        "trend_score": 0.49,
+        "relative_strength_score": 0.38,
+        "volatility_percentile": 0.64,
+        "credit_spread_percentile": 0.55,
+        "yield_curve_slope_bps": 35.0
+      }
+    },
+    "MXEA": {
+      "asset_type": "index",
+      "index": {
+        "breadth_percent_above_200dma": 0.57,
+        "trend_score": 0.59,
+        "relative_strength_score": 0.54,
+        "volatility_percentile": 0.48,
+        "credit_spread_percentile": 0.40,
+        "yield_curve_slope_bps": 20.0
+      }
+    },
+    "MXEF": {
+      "asset_type": "index",
+      "index": {
+        "breadth_percent_above_200dma": 0.41,
+        "trend_score": 0.44,
+        "relative_strength_score": 0.33,
+        "volatility_percentile": 0.69,
+        "credit_spread_percentile": 0.62,
+        "yield_curve_slope_bps": 10.0
+      }
+    },
+    "UST20": {
+      "asset_type": "index",
+      "index": {
+        "breadth_percent_above_200dma": 0.66,
+        "trend_score": 0.63,
+        "relative_strength_score": 0.61,
+        "volatility_percentile": 0.37,
+        "credit_spread_percentile": 0.20,
+        "yield_curve_slope_bps": 35.0
+      }
+    },
+    "UST7_10": {
+      "asset_type": "index",
+      "index": {
+        "breadth_percent_above_200dma": 0.64,
+        "trend_score": 0.60,
+        "relative_strength_score": 0.57,
+        "volatility_percentile": 0.31,
+        "credit_spread_percentile": 0.20,
+        "yield_curve_slope_bps": 35.0
+      }
+    },
+    "UST1_3": {
+      "asset_type": "index",
+      "index": {
+        "breadth_percent_above_200dma": 0.62,
+        "trend_score": 0.56,
+        "relative_strength_score": 0.51,
+        "volatility_percentile": 0.12,
+        "credit_spread_percentile": 0.18,
+        "yield_curve_slope_bps": 35.0
+      }
+    },
+    "GOLD": {
+      "asset_type": "index",
+      "index": {
+        "breadth_percent_above_200dma": 0.61,
+        "trend_score": 0.65,
+        "relative_strength_score": 0.59,
+        "volatility_percentile": 0.46,
+        "credit_spread_percentile": 0.30,
+        "yield_curve_slope_bps": 35.0
+      }
+    }
+  }
+}

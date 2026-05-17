@@ -18,6 +18,79 @@ class StrategyParameters:
 
 
 @dataclass(frozen=True)
+class ResearchWeights:
+    quant: float = 0.35
+    company: float = 0.30
+    index: float = 0.20
+    etf: float = 0.15
+    minimum_total_score: float = 0.45
+
+
+@dataclass(frozen=True)
+class CompanyMetrics:
+    revenue_growth: float | None = None
+    earnings_growth: float | None = None
+    gross_margin: float | None = None
+    free_cash_flow_margin: float | None = None
+    return_on_equity: float | None = None
+    debt_to_equity: float | None = None
+    net_debt_to_ebitda: float | None = None
+    interest_coverage: float | None = None
+    pe_ratio: float | None = None
+    ev_to_ebitda: float | None = None
+
+
+@dataclass(frozen=True)
+class ETFMetrics:
+    expense_ratio: float | None = None
+    assets_under_management_billion: float | None = None
+    average_daily_dollar_volume_billion: float | None = None
+    tracking_error: float | None = None
+    flow_1m_percent: float | None = None
+    flow_3m_percent: float | None = None
+    portfolio_quality_score: float | None = None
+    portfolio_valuation_score: float | None = None
+
+
+@dataclass(frozen=True)
+class IndexMetrics:
+    breadth_percent_above_200dma: float | None = None
+    trend_score: float | None = None
+    relative_strength_score: float | None = None
+    volatility_percentile: float | None = None
+    credit_spread_percentile: float | None = None
+    yield_curve_slope_bps: float | None = None
+
+
+@dataclass(frozen=True)
+class ResearchAsset:
+    symbol: str
+    asset_type: str
+    benchmark_index: str | None = None
+    company: CompanyMetrics | None = None
+    etf: ETFMetrics | None = None
+    index: IndexMetrics | None = None
+
+
+@dataclass(frozen=True)
+class ResearchSnapshot:
+    as_of: date
+    weights: ResearchWeights
+    assets: dict[str, ResearchAsset]
+
+
+@dataclass(frozen=True)
+class ResearchAssessment:
+    symbol: str
+    total_score: float
+    research_score: float | None = None
+    component_scores: dict[str, float] = field(default_factory=dict)
+    asset_type: str | None = None
+    benchmark_index: str | None = None
+    notes: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class AlignedHistory:
     dates: list[date]
     closes: dict[str, list[float]]
@@ -29,6 +102,7 @@ class Signal:
     regime: str
     weights: dict[str, float]
     diagnostics: dict[str, float | str] = field(default_factory=dict)
+    assessments: dict[str, ResearchAssessment] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

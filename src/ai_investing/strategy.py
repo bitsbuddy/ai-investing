@@ -1,11 +1,28 @@
 from __future__ import annotations
 
 import math
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import date
 from statistics import mean, pstdev
 
 from .models import AlignedHistory, Signal, StrategyParameters
+from .research import ResearchOverlay
+
+
+@dataclass(frozen=True)
+class _Candidate:
+    symbol: str
+    raw_score: float
+    volatility: float
+
+
+@dataclass(frozen=True)
+class _RankedCandidate:
+    symbol: str
+    raw_score: float
+    quant_score: float
+    combined_score: float
+    volatility: float
 
 
 def align_history(price_history: dict[str, dict[date, float]]) -> AlignedHistory:
@@ -35,10 +52,12 @@ class ETFMomentumStrategy:
         risk_on_universe: tuple[str, ...],
         defensive_universe: tuple[str, ...],
         params: StrategyParameters,
+        research_overlay: ResearchOverlay | None = None,
     ) -> None:
         self.risk_on_universe = risk_on_universe
         self.defensive_universe = defensive_universe
         self.params = params
+        self.research_overlay = research_overlay
 
     @property
     def warmup_bars(self) -> int:
@@ -55,44 +74,58 @@ class ETFMomentumStrategy:
             )
 
         current_date = history.dates[index]
-        risk_on_scores: list[tuple[str, float, float]] = []
-        defensive_scores: list[tuple[str, float, float]] = []
+        risk_on_candidates: list[_Candidate] = []
+        defensive_candidates: list[_Candidate] = []
         diagnostics: dict[str, float | str] = {}
+        assessments = {}
 
         for symbol in self.risk_on_universe:
             price = history.closes[symbol][index]
             trend = self._sma(history.closes[symbol], index, self.params.trend_window)
             score = self._momentum_score(history.closes[symbol], index)
             volatility = self._volatility(history.closes[symbol], index)
-            diagnostics[f"{symbol}_score"] = round(score, 6)
+            diagnostics[f"{symbol}_raw_score"] = round(score, 6)
             if price > trend and score > 0:
-                risk_on_scores.append((symbol, score, volatility))
+                risk_on_candidates.append(
+                    _Candidate(symbol=symbol, raw_score=score, volatility=volatility)
+                )
 
         for symbol in self.defensive_universe:
             score = self._momentum_score(history.closes[symbol], index)
             volatility = self._volatility(history.closes[symbol], index)
-            defensive_scores.append((symbol, score, volatility))
+            defensive_candidates.append(
+                _Candidate(symbol=symbol, raw_score=score, volatility=volatility)
+            )
 
-        if len(risk_on_scores) >= self.params.top_n:
-            selected = sorted(risk_on_scores, key=lambda item: item[1], reverse=True)[
-                : self.params.top_n
-            ]
+        ranked_risk_on = self._rank_candidates(risk_on_candidates, assessments)
+        ranked_defensive = self._rank_candidates(defensive_candidates, assessments)
+        eligible_risk_on = [
+            candidate
+            for candidate in ranked_risk_on
+            if self._risk_on_candidate_is_allowed(candidate.symbol, assessments)
+        ]
+
+        if len(eligible_risk_on) >= self.params.top_n:
+            selected = eligible_risk_on[: self.params.top_n]
             regime = "risk_on"
         else:
-            selected = sorted(defensive_scores, key=lambda item: item[1], reverse=True)[
-                : self.params.defensive_count
-            ]
+            selected = ranked_defensive[: self.params.defensive_count]
             regime = "risk_off"
 
         raw_weights = {
-            symbol: 1.0 / max(volatility, 1e-6)
-            for symbol, _, volatility in selected
+            candidate.symbol: max(candidate.combined_score, 0.05)
+            / max(candidate.volatility, 1e-6)
+            for candidate in selected
         }
         weights = _cap_and_scale_weights(
             raw_weights,
             investable_weight=1.0 - self.params.cash_buffer,
             max_position_weight=self.params.max_position_weight,
         )
+        for symbol, assessment in assessments.items():
+            diagnostics[f"{symbol}_combined_score"] = round(assessment.total_score, 6)
+            for component, score in assessment.component_scores.items():
+                diagnostics[f"{symbol}_{component}_score"] = round(score, 6)
         diagnostics["selected_count"] = float(len(weights))
         diagnostics["cash_buffer"] = round(1.0 - sum(weights.values()), 6)
         diagnostics["rebalance_frequency"] = self.params.rebalance_frequency
@@ -101,6 +134,7 @@ class ETFMomentumStrategy:
             regime=regime,
             weights=weights,
             diagnostics=diagnostics,
+            assessments=assessments,
         )
 
     def next_rebalance_index(
@@ -139,6 +173,47 @@ class ETFMomentumStrategy:
                             )
                         )
         return candidates
+
+    def _rank_candidates(
+        self,
+        candidates: list[_Candidate],
+        assessments: dict[str, object],
+    ) -> list[_RankedCandidate]:
+        if not candidates:
+            return []
+
+        quant_scores = _normalize_candidate_scores(candidates)
+        ranked: list[_RankedCandidate] = []
+        for candidate in candidates:
+            quant_score = quant_scores[candidate.symbol]
+            if self.research_overlay is None:
+                combined_score = quant_score
+            else:
+                assessment = self.research_overlay.assess_symbol(
+                    candidate.symbol, quant_score
+                )
+                assessments[candidate.symbol] = assessment
+                combined_score = assessment.total_score
+            ranked.append(
+                _RankedCandidate(
+                    symbol=candidate.symbol,
+                    raw_score=candidate.raw_score,
+                    quant_score=quant_score,
+                    combined_score=combined_score,
+                    volatility=candidate.volatility,
+                )
+            )
+        return sorted(ranked, key=lambda item: item.combined_score, reverse=True)
+
+    def _risk_on_candidate_is_allowed(
+        self, symbol: str, assessments: dict[str, object]
+    ) -> bool:
+        if self.research_overlay is None:
+            return True
+        assessment = assessments.get(symbol)
+        if assessment is None:
+            return True
+        return self.research_overlay.eligible_for_risk_on(assessment)
 
     def _momentum_score(self, closes: list[float], index: int) -> float:
         score = 0.0
@@ -198,3 +273,17 @@ def _cap_and_scale_weights(
         break
 
     return {symbol: weight for symbol, weight in results.items() if weight > 0}
+
+
+def _normalize_candidate_scores(candidates: list[_Candidate]) -> dict[str, float]:
+    if len(candidates) == 1:
+        return {candidates[0].symbol: 1.0}
+    raw_values = [candidate.raw_score for candidate in candidates]
+    low = min(raw_values)
+    high = max(raw_values)
+    if math.isclose(low, high):
+        return {candidate.symbol: 0.5 for candidate in candidates}
+    return {
+        candidate.symbol: (candidate.raw_score - low) / (high - low)
+        for candidate in candidates
+    }

@@ -36,6 +36,7 @@ class RuntimeConfig:
     default_feed: str
     risk_on_universe: tuple[str, ...]
     defensive_universe: tuple[str, ...]
+    research_snapshot_path: Path | None
 
 
 def load_broker_config() -> BrokerConfig:
@@ -58,6 +59,7 @@ def load_broker_config() -> BrokerConfig:
 
 
 def load_runtime_config() -> RuntimeConfig:
+    research_snapshot_raw = os.getenv("AI_INVESTING_RESEARCH_SNAPSHOT_PATH", "").strip()
     return RuntimeConfig(
         enable_live=_bool_env("AI_INVESTING_ENABLE_LIVE", False),
         state_path=Path(
@@ -69,6 +71,9 @@ def load_runtime_config() -> RuntimeConfig:
         ),
         defensive_universe=tuple(
             _csv_env("AI_INVESTING_DEFENSIVE", ["TLT", "IEF", "GLD", "SHY"])
+        ),
+        research_snapshot_path=(
+            Path(research_snapshot_raw) if research_snapshot_raw else None
         ),
     )
 

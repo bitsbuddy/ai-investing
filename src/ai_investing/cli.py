@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 
 from .alpaca import AlpacaClient
 from .backtest import optimize_strategy, run_backtest
@@ -12,6 +13,7 @@ from .config import (
 )
 from .execution import execute_rebalance
 from .models import StrategyParameters
+from .research import ResearchOverlay, load_research_snapshot
 from .strategy import ETFMomentumStrategy, align_history
 
 
@@ -28,12 +30,21 @@ def build_parser() -> argparse.ArgumentParser:
     signal = subparsers.add_parser("signal", help="Generate current target weights.")
     signal.add_argument("--lookback-days", type=int, default=900)
     signal.add_argument("--feed", default=None)
+    signal.add_argument("--research-snapshot", default=None)
 
     trade = subparsers.add_parser("trade", help="Preview or submit a rebalance.")
     trade.add_argument("--lookback-days", type=int, default=900)
     trade.add_argument("--feed", default=None)
+    trade.add_argument("--research-snapshot", default=None)
     trade.add_argument("--submit", action="store_true")
     trade.add_argument("--force", action="store_true")
+
+    research = subparsers.add_parser(
+        "research", help="Run multi-layer company/index/ETF analysis."
+    )
+    research.add_argument("--lookback-days", type=int, default=900)
+    research.add_argument("--feed", default=None)
+    research.add_argument("--research-snapshot", default=None)
 
     return parser
 
@@ -53,6 +64,9 @@ def main() -> None:
         return
     if args.command == "trade":
         _run_trade_command(client, broker_config.paper, runtime_config, args)
+        return
+    if args.command == "research":
+        _run_research_command(client, runtime_config, args)
         return
     raise ValueError(f"Unsupported command: {args.command}")
 
@@ -110,9 +124,11 @@ def _run_signal_command(
         runtime_config=runtime_config,
         lookback_days=args.lookback_days,
         feed=args.feed or runtime_config.default_feed,
+        research_snapshot_path=_resolve_research_snapshot_path(runtime_config, args),
     )
     print(f"Using parameters: {params}")
     _print_signal(signal)
+    _print_selected_research(signal)
 
 
 def _run_trade_command(
@@ -132,6 +148,7 @@ def _run_trade_command(
         runtime_config=runtime_config,
         lookback_days=args.lookback_days,
         feed=args.feed or runtime_config.default_feed,
+        research_snapshot_path=_resolve_research_snapshot_path(runtime_config, args),
     )
     latest_prices = {
         symbol: closes[signal_index] for symbol, closes in history.closes.items()
@@ -149,6 +166,7 @@ def _run_trade_command(
 
     print(f"Using parameters: {params}")
     _print_signal(signal)
+    _print_selected_research(signal)
     print("")
     if not actions:
         print("No rebalance required.")
@@ -169,7 +187,35 @@ def _run_trade_command(
         print(f"High-water mark: ${state.high_water_mark:.2f}")
 
 
-def _compute_latest_signal(client: AlpacaClient, runtime_config, lookback_days: int, feed: str):
+def _run_research_command(
+    client: AlpacaClient, runtime_config, args: argparse.Namespace
+) -> None:
+    research_snapshot_path = _resolve_research_snapshot_path(runtime_config, args)
+    if research_snapshot_path is None:
+        raise RuntimeError(
+            "Research mode requires a snapshot file. Set AI_INVESTING_RESEARCH_SNAPSHOT_PATH or pass --research-snapshot."
+        )
+    signal, _history, params, _signal_index = _compute_latest_signal(
+        client=client,
+        runtime_config=runtime_config,
+        lookback_days=args.lookback_days,
+        feed=args.feed or runtime_config.default_feed,
+        research_snapshot_path=research_snapshot_path,
+    )
+    print(f"Using parameters: {params}")
+    _print_signal(signal)
+    print("")
+    print("Research Scorecard")
+    _print_all_research(signal)
+
+
+def _compute_latest_signal(
+    client: AlpacaClient,
+    runtime_config,
+    lookback_days: int,
+    feed: str,
+    research_snapshot_path: Path | None = None,
+):
     end = _today_utc()
     start = end - timedelta(days=lookback_days)
     symbols = list(
@@ -184,6 +230,7 @@ def _compute_latest_signal(client: AlpacaClient, runtime_config, lookback_days: 
         end=end,
         feed=feed,
     )
+    research_overlay = _load_research_overlay(research_snapshot_path)
     best_result = optimize_strategy(
         history,
         risk_on_universe=runtime_config.risk_on_universe,
@@ -194,6 +241,7 @@ def _compute_latest_signal(client: AlpacaClient, runtime_config, lookback_days: 
         risk_on_universe=runtime_config.risk_on_universe,
         defensive_universe=runtime_config.defensive_universe,
         params=best_result.params,
+        research_overlay=research_overlay,
     )
     signal_index = len(history.dates) - 1
     if history.dates[signal_index] >= _today_utc() and signal_index > strategy.warmup_bars:
@@ -227,6 +275,67 @@ def _print_signal(signal) -> None:
         print(f"- {symbol}: {weight:.2%}")
     cash = 1.0 - sum(signal.weights.values())
     print(f"- CASH: {cash:.2%}")
+
+
+def _print_selected_research(signal) -> None:
+    if not signal.assessments:
+        return
+    print("")
+    print("Selected Research")
+    selected_symbols = set(signal.weights)
+    selected = [
+        signal.assessments[symbol]
+        for symbol in selected_symbols
+        if symbol in signal.assessments
+    ]
+    if not selected:
+        return
+    for assessment in sorted(selected, key=lambda item: item.total_score, reverse=True):
+        print(_format_assessment_line(assessment))
+
+
+def _print_all_research(signal) -> None:
+    if not signal.assessments:
+        print("No research overlay loaded.")
+        return
+    for assessment in sorted(
+        signal.assessments.values(), key=lambda item: item.total_score, reverse=True
+    ):
+        print(_format_assessment_line(assessment))
+
+
+def _format_assessment_line(assessment) -> str:
+    component_parts = [
+        f"{name}={score:.2f}"
+        for name, score in sorted(assessment.component_scores.items())
+    ]
+    benchmark = (
+        f" | benchmark={assessment.benchmark_index}"
+        if assessment.benchmark_index
+        else ""
+    )
+    return (
+        f"- {assessment.symbol}: total={assessment.total_score:.2f}"
+        f" | {' '.join(component_parts)}{benchmark}"
+    )
+
+
+def _load_research_overlay(
+    research_snapshot_path: Path | None,
+) -> ResearchOverlay | None:
+    if research_snapshot_path is None:
+        return None
+    snapshot = load_research_snapshot(research_snapshot_path)
+    return ResearchOverlay(snapshot)
+
+
+def _resolve_research_snapshot_path(
+    runtime_config, args: argparse.Namespace
+) -> Path | None:
+    raw_value = getattr(args, "research_snapshot", None)
+    if raw_value:
+        return Path(raw_value)
+    return runtime_config.research_snapshot_path
 
 
 def _parse_date(value: str) -> date:
