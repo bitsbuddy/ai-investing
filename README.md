@@ -121,8 +121,30 @@ If you do that, provide company metrics for those equities in the research snaps
 If you want a step-by-step operator guide, read [HOW_TO_USE.md](/Users/rishik/AI-Investing/HOW_TO_USE.md:1).
 
 1. Create an Alpaca account and generate API credentials.
-2. Copy `.env.example` to your own environment file and set the values.
+2. Run `paper-setup` for a paper-trading env file, or copy `.env.example` to your own environment file and set the values manually.
 3. Run commands with `PYTHONPATH=src` or install the package locally.
+
+### One-Command Paper Setup
+
+```bash
+PYTHONPATH=src python3 -m ai_investing.cli paper-setup
+```
+
+By default this writes `.env.paper` with safe paper-trading settings:
+
+- `ALPACA_PAPER=true`
+- `AI_INVESTING_ENABLE_LIVE=0`
+- a separate paper state file
+- the example research snapshot path when available
+
+Then load it and run the paper workflow:
+
+```bash
+set -a; source .env.paper; set +a
+PYTHONPATH=src python3 -m ai_investing.cli signal --research-snapshot examples/research_snapshot.example.json
+PYTHONPATH=src python3 -m ai_investing.cli trade --research-snapshot examples/research_snapshot.example.json
+PYTHONPATH=src python3 -m ai_investing.cli trade --submit --research-snapshot examples/research_snapshot.example.json
+```
 
 ### Backtest
 

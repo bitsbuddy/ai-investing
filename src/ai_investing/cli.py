@@ -27,6 +27,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AI Investing CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    paper_setup = subparsers.add_parser(
+        "paper-setup",
+        help="Create a paper-trading env file and print the next commands to run.",
+    )
+    paper_setup.add_argument("--env-file", default=".env.paper")
+    paper_setup.add_argument("--research-snapshot", default=None)
+    paper_setup.add_argument("--sec-user-agent", default=None)
+    paper_setup.add_argument("--force", action="store_true")
+
     backtest = subparsers.add_parser("backtest", help="Run a historical backtest.")
     backtest.add_argument("--start", type=_parse_date, required=True)
     backtest.add_argument("--end", type=_parse_date, default=_today_utc())
@@ -72,6 +81,10 @@ def main() -> None:
     args = build_parser().parse_args()
     broker_config = load_broker_config()
     runtime_config = load_runtime_config()
+
+    if args.command == "paper-setup":
+        _run_paper_setup_command(broker_config, runtime_config, args)
+        return
 
     if args.command == "research":
         research_snapshot_path = _resolve_research_snapshot_path(runtime_config, args)
@@ -146,6 +159,68 @@ def _run_backtest_command(
     print(f"Max drawdown: {result.max_drawdown:.2%}")
     print(f"Average turnover: {result.average_turnover:.2%}")
     print(f"Score: {result.score:.4f}")
+
+
+def _run_paper_setup_command(
+    broker_config,
+    runtime_config,
+    args: argparse.Namespace,
+) -> None:
+    env_path = Path(args.env_file)
+    if env_path.exists() and not args.force:
+        raise FileExistsError(
+            f"{env_path} already exists. Re-run with --force to overwrite it."
+        )
+
+    research_snapshot = _resolve_paper_setup_snapshot_path(runtime_config, args)
+    sec_user_agent = _resolve_paper_setup_sec_user_agent(runtime_config, args)
+    env_payload = _build_paper_env_payload(
+        broker_config=broker_config,
+        runtime_config=runtime_config,
+        research_snapshot_path=research_snapshot,
+        sec_user_agent=sec_user_agent,
+    )
+    env_path.write_text(_render_env_file(env_payload))
+
+    print(f"Wrote paper config: {env_path}")
+    print("")
+    print("Paper Trading Settings")
+    print("- ALPACA_PAPER=true")
+    print("- AI_INVESTING_ENABLE_LIVE=0")
+    print(f"- state file: {env_payload['AI_INVESTING_STATE_PATH']}")
+    print(
+        f"- credentials: {'present' if _has_broker_credentials(broker_config) else 'missing placeholders'}"
+    )
+    print("")
+    print("Next Commands")
+    print(f"- set -a; source {env_path}; set +a")
+    if research_snapshot is not None:
+        print(
+            "- PYTHONPATH=src python3 -m ai_investing.cli research "
+            f"--research-snapshot {research_snapshot}"
+        )
+        print(
+            "- PYTHONPATH=src python3 -m ai_investing.cli signal "
+            f"--research-snapshot {research_snapshot}"
+        )
+        print(
+            "- PYTHONPATH=src python3 -m ai_investing.cli trade "
+            f"--research-snapshot {research_snapshot}"
+        )
+        print(
+            "- PYTHONPATH=src python3 -m ai_investing.cli trade --submit "
+            f"--research-snapshot {research_snapshot}"
+        )
+    else:
+        print("- PYTHONPATH=src python3 -m ai_investing.cli signal")
+        print("- PYTHONPATH=src python3 -m ai_investing.cli trade")
+        print("- PYTHONPATH=src python3 -m ai_investing.cli trade --submit")
+
+    if not _has_broker_credentials(broker_config):
+        print("")
+        print(
+            "Replace ALPACA_API_KEY and ALPACA_SECRET_KEY in the env file with your Alpaca paper credentials before submitting orders."
+        )
 
 
 def _run_signal_command(
@@ -507,3 +582,78 @@ def _parse_date(value: str) -> date:
 
 def _today_utc() -> date:
     return datetime.now(UTC).date()
+
+
+def _build_paper_env_payload(
+    *,
+    broker_config,
+    runtime_config,
+    research_snapshot_path: Path | None,
+    sec_user_agent: str,
+) -> dict[str, str]:
+    return {
+        "ALPACA_API_KEY": broker_config.api_key or "your-paper-key",
+        "ALPACA_SECRET_KEY": broker_config.secret_key or "your-paper-secret",
+        "ALPACA_PAPER": "true",
+        "AI_INVESTING_ENABLE_LIVE": "0",
+        "AI_INVESTING_STATE_PATH": ".ai_investing_paper_state.json",
+        "AI_INVESTING_DEFAULT_FEED": runtime_config.default_feed,
+        "AI_INVESTING_RISK_ON": ",".join(runtime_config.risk_on_universe),
+        "AI_INVESTING_DEFENSIVE": ",".join(runtime_config.defensive_universe),
+        "AI_INVESTING_RESEARCH_SNAPSHOT_PATH": (
+            str(research_snapshot_path) if research_snapshot_path is not None else ""
+        ),
+        "AI_INVESTING_RESEARCH_MAX_AGE_DAYS": str(
+            runtime_config.research_max_age_days
+        ),
+        "AI_INVESTING_ENABLE_OFFICIAL_NEWS": (
+            "1" if runtime_config.enable_official_news else "0"
+        ),
+        "AI_INVESTING_OFFICIAL_NEWS_LOOKBACK_DAYS": str(
+            runtime_config.official_news_lookback_days
+        ),
+        "AI_INVESTING_REQUIRE_OFFICIAL_NEWS": (
+            "1" if runtime_config.require_official_news else "0"
+        ),
+        "AI_INVESTING_SEC_USER_AGENT": sec_user_agent,
+        "AI_INVESTING_MAX_PRICE_DRIFT_PCT": str(runtime_config.max_price_drift_pct),
+    }
+
+
+def _render_env_file(values: dict[str, str]) -> str:
+    lines = [f"{key}={_env_quote(value)}" for key, value in values.items()]
+    return "\n".join(lines) + "\n"
+
+
+def _env_quote(value: str) -> str:
+    if value == "":
+        return ""
+    if any(character.isspace() for character in value):
+        escaped = value.replace('"', '\\"')
+        return f'"{escaped}"'
+    return value
+
+
+def _resolve_paper_setup_snapshot_path(
+    runtime_config,
+    args: argparse.Namespace,
+) -> Path | None:
+    raw_value = getattr(args, "research_snapshot", None)
+    if raw_value:
+        return Path(raw_value)
+    if runtime_config.research_snapshot_path is not None:
+        return runtime_config.research_snapshot_path
+    default_snapshot = Path("examples/research_snapshot.example.json")
+    if default_snapshot.exists():
+        return default_snapshot
+    return None
+
+
+def _resolve_paper_setup_sec_user_agent(
+    runtime_config,
+    args: argparse.Namespace,
+) -> str:
+    raw_value = getattr(args, "sec_user_agent", None)
+    if raw_value:
+        return raw_value
+    return runtime_config.sec_user_agent

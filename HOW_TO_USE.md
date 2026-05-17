@@ -15,10 +15,22 @@ This file is the practical guide for running the repo.
 From the repo root:
 
 ```bash
+PYTHONPATH=src python3 -m ai_investing.cli paper-setup
+```
+
+This writes `.env.paper` by default. Then load it:
+
+```bash
+set -a; source .env.paper; set +a
+```
+
+If you prefer manual setup, you can still do:
+
+```bash
 cp .env.example .env.local
 ```
 
-Set at least these values in `.env.local`:
+Set at least these values in `.env.local` or `.env.paper`:
 
 ```env
 ALPACA_API_KEY=your_key
@@ -36,10 +48,19 @@ AI_INVESTING_SEC_USER_AGENT=AI-Investing your-email@example.com
 
 When running commands, load your env file in your shell first or export the variables manually.
 
+Useful `paper-setup` variants:
+
+```bash
+PYTHONPATH=src python3 -m ai_investing.cli paper-setup --env-file .env.local --force
+PYTHONPATH=src python3 -m ai_investing.cli paper-setup --research-snapshot examples/research_snapshot.example.json
+PYTHONPATH=src python3 -m ai_investing.cli paper-setup --sec-user-agent "AI-Investing your-email@example.com"
+```
+
 ## 3. Main Ways To Use It
 
-There are 4 main commands:
+There are 5 main commands:
 
+- `paper-setup`: create a safe paper-trading env file
 - `backtest`: test the strategy on history
 - `research`: score assets using the research snapshot
 - `signal`: generate the current target portfolio
@@ -124,7 +145,7 @@ Make sure:
 - `ALPACA_PAPER=true`
 - `AI_INVESTING_ENABLE_LIVE=0`
 
-Then run:
+If you used `paper-setup`, those are already set. Then run:
 
 ```bash
 PYTHONPATH=src python3 -m ai_investing.cli trade --submit
