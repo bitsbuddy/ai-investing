@@ -89,6 +89,8 @@ class OfficialNewsItem:
     impact_scores: dict[str, float] = field(default_factory=dict)
     symbols: tuple[str, ...] = ()
     summary: str | None = None
+    analysis_summary: str | None = None
+    analysis_confidence: float | None = None
 
 
 @dataclass(frozen=True)

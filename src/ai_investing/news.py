@@ -12,6 +12,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from xml.etree import ElementTree
 
+from .llm_news import analyze_official_news_context_with_llm
 from .models import OfficialNewsContext, OfficialNewsItem, ResearchAsset
 from .tls import build_ssl_context, tls_help_message
 
@@ -47,6 +48,13 @@ def build_official_news_context(
     user_agent: str,
     assets: dict[str, ResearchAsset] | None = None,
     require_success: bool = False,
+    enable_llm: bool = False,
+    require_llm: bool = False,
+    llm_api_key: str = "",
+    llm_model: str = "gpt-5-mini",
+    llm_base_url: str = "https://api.openai.com/v1",
+    llm_max_items: int = 8,
+    llm_max_chars: int = 6000,
 ) -> OfficialNewsContext | None:
     statuses: dict[str, str] = {}
     items: list[OfficialNewsItem] = []
@@ -96,7 +104,7 @@ def build_official_news_context(
             )
         return None
 
-    return OfficialNewsContext(
+    context = OfficialNewsContext(
         as_of=as_of,
         lookback_days=lookback_days,
         risk_on_score=risk_on_score,
@@ -106,6 +114,18 @@ def build_official_news_context(
         company_scores=company_scores,
         items=tuple(items),
         source_status=statuses,
+    )
+    if not enable_llm:
+        return context
+    return analyze_official_news_context_with_llm(
+        context,
+        api_key=llm_api_key,
+        model=llm_model,
+        base_url=llm_base_url,
+        max_items=llm_max_items,
+        max_chars=llm_max_chars,
+        user_agent=user_agent,
+        require_success=require_llm,
     )
 
 
@@ -145,9 +165,10 @@ def summarize_official_news(
 ) -> list[str]:
     lines = []
     for item in context.items[:limit]:
-        lines.append(
-            f"{item.published_on.isoformat()} | {item.source.upper()} | {item.title}"
-        )
+        line = f"{item.published_on.isoformat()} | {item.source.upper()} | {item.title}"
+        if item.analysis_summary:
+            line += f" | {item.analysis_summary}"
+        lines.append(line)
     return lines
 
 

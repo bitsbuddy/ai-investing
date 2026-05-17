@@ -4,6 +4,11 @@ import unittest
 from datetime import date
 from unittest.mock import patch
 
+from ai_investing.llm_news import (
+    LLMNewsItemAnalysis,
+    LLMNewsSymbolScore,
+    analyze_official_news_context_with_llm,
+)
 from ai_investing.models import OfficialNewsContext, OfficialNewsItem, ResearchAsset
 from ai_investing.news import build_official_news_context, score_official_news_for_asset
 
@@ -121,6 +126,88 @@ Pagination</div>
         assert tlt_score is not None
         self.assertGreater(msft_score, context.risk_on_score or 0.0)
         self.assertEqual(tlt_score, context.duration_score)
+
+    def test_llm_analysis_enriches_context_and_company_scores(self) -> None:
+        context = OfficialNewsContext(
+            as_of=date(2026, 5, 17),
+            lookback_days=14,
+            risk_on_score=0.50,
+            duration_score=0.50,
+            cash_score=0.50,
+            gold_score=0.50,
+            company_scores={"MSFT": 0.55},
+            items=(
+                OfficialNewsItem(
+                    source="fed",
+                    published_on=date(2026, 5, 16),
+                    title="Federal Reserve issues FOMC statement",
+                    url="https://www.federalreserve.gov/newsevents/pressreleases/monetary20260429a.htm",
+                    impact_scores={
+                        "risk_on": 0.50,
+                        "duration": 0.48,
+                        "cash": 0.52,
+                        "gold": 0.52,
+                    },
+                    summary="The Committee maintained the target range.",
+                ),
+                OfficialNewsItem(
+                    source="sec",
+                    published_on=date(2026, 5, 15),
+                    title="MSFT filed 8-K",
+                    url="https://www.sec.gov/Archives/edgar/data/789019/example.htm",
+                    impact_scores={"risk_on": 0.40},
+                    symbols=("MSFT",),
+                ),
+            ),
+            source_status={"fed": "ok (1 items)", "sec": "ok (1 symbols)"},
+        )
+
+        analyses = [
+            LLMNewsItemAnalysis(
+                item_index=0,
+                summary="Fed held rates steady and signaled little near-term change.",
+                confidence=0.85,
+                risk_on_score=0.46,
+                duration_score=0.54,
+                cash_score=0.52,
+                gold_score=0.50,
+            ),
+            LLMNewsItemAnalysis(
+                item_index=1,
+                summary="The filing reads mildly negative for Microsoft near term.",
+                confidence=0.80,
+                risk_on_score=0.38,
+                duration_score=0.50,
+                cash_score=0.50,
+                gold_score=0.50,
+                symbol_scores=(LLMNewsSymbolScore(symbol="MSFT", score=0.25),),
+            ),
+        ]
+
+        with patch(
+            "ai_investing.llm_news._request_llm_news_analysis",
+            return_value=analyses,
+        ):
+            updated = analyze_official_news_context_with_llm(
+                context,
+                api_key="test-key",
+                model="gpt-5-mini",
+                base_url="https://api.openai.com/v1",
+                max_items=4,
+                max_chars=4000,
+                user_agent="AI-Investing tests@example.com",
+                require_success=True,
+            )
+
+        self.assertIn("llm", updated.source_status)
+        self.assertIn("gpt-5-mini", updated.source_status["llm"])
+        self.assertEqual(
+            updated.items[0].analysis_summary,
+            "Fed held rates steady and signaled little near-term change.",
+        )
+        self.assertLess(updated.company_scores["MSFT"], 0.55)
+        self.assertIsNotNone(updated.risk_on_score)
+        self.assertLess(updated.risk_on_score or 1.0, 0.50)
 
 
 if __name__ == "__main__":

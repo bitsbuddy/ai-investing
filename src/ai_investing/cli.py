@@ -84,8 +84,10 @@ def build_parser() -> argparse.ArgumentParser:
     automation_run.add_argument("--training-window-bars", type=int, default=756)
     automation_run.add_argument("--force", action="store_true")
     automation_run.add_argument("--no-official-news", action="store_true")
+    automation_run.add_argument("--no-llm-news", action="store_true")
     automation_run.add_argument("--official-news-lookback-days", type=int, default=None)
     automation_run.add_argument("--require-official-news", action="store_true")
+    automation_run.add_argument("--require-llm-news", action="store_true")
     automation_run.add_argument("--manual", action="store_true")
     automation_run.add_argument("--preview-only", action="store_true")
 
@@ -102,8 +104,10 @@ def build_parser() -> argparse.ArgumentParser:
     signal.add_argument("--research-snapshot", default=None)
     signal.add_argument("--training-window-bars", type=int, default=756)
     signal.add_argument("--no-official-news", action="store_true")
+    signal.add_argument("--no-llm-news", action="store_true")
     signal.add_argument("--official-news-lookback-days", type=int, default=None)
     signal.add_argument("--require-official-news", action="store_true")
+    signal.add_argument("--require-llm-news", action="store_true")
 
     trade = subparsers.add_parser("trade", help="Preview or submit a rebalance.")
     trade.add_argument("--lookback-days", type=int, default=900)
@@ -113,8 +117,10 @@ def build_parser() -> argparse.ArgumentParser:
     trade.add_argument("--submit", action="store_true")
     trade.add_argument("--force", action="store_true")
     trade.add_argument("--no-official-news", action="store_true")
+    trade.add_argument("--no-llm-news", action="store_true")
     trade.add_argument("--official-news-lookback-days", type=int, default=None)
     trade.add_argument("--require-official-news", action="store_true")
+    trade.add_argument("--require-llm-news", action="store_true")
 
     research = subparsers.add_parser(
         "research", help="Run multi-layer company/index/ETF analysis."
@@ -124,8 +130,10 @@ def build_parser() -> argparse.ArgumentParser:
     research.add_argument("--research-snapshot", default=None)
     research.add_argument("--training-window-bars", type=int, default=756)
     research.add_argument("--no-official-news", action="store_true")
+    research.add_argument("--no-llm-news", action="store_true")
     research.add_argument("--official-news-lookback-days", type=int, default=None)
     research.add_argument("--require-official-news", action="store_true")
+    research.add_argument("--require-llm-news", action="store_true")
 
     return parser
 
@@ -755,12 +763,25 @@ def _load_official_news_context(
     require_success = runtime_config.require_official_news or bool(
         args is not None and getattr(args, "require_official_news", False)
     )
+    enable_llm = runtime_config.enable_llm_news and not bool(
+        args is not None and getattr(args, "no_llm_news", False)
+    )
+    require_llm = runtime_config.require_llm_news or bool(
+        args is not None and getattr(args, "require_llm_news", False)
+    )
     return build_official_news_context(
         as_of=_today_utc(),
         lookback_days=lookback_days,
         user_agent=runtime_config.sec_user_agent,
         assets=snapshot.assets if snapshot is not None else None,
         require_success=require_success,
+        enable_llm=enable_llm,
+        require_llm=require_llm,
+        llm_api_key=runtime_config.llm_news_api_key,
+        llm_model=runtime_config.llm_news_model,
+        llm_base_url=runtime_config.llm_news_base_url,
+        llm_max_items=runtime_config.llm_news_max_items,
+        llm_max_chars=runtime_config.llm_news_max_chars,
     )
 
 
@@ -795,6 +816,7 @@ def _build_paper_env_payload(
     return {
         "ALPACA_API_KEY": broker_config.api_key or "your-paper-key",
         "ALPACA_SECRET_KEY": broker_config.secret_key or "your-paper-secret",
+        "OPENAI_API_KEY": runtime_config.llm_news_api_key,
         "ALPACA_PAPER": "true",
         "AI_INVESTING_ENABLE_LIVE": "0",
         "AI_INVESTING_STATE_PATH": ".ai_investing_paper_state.json",
@@ -810,13 +832,23 @@ def _build_paper_env_payload(
         "AI_INVESTING_ENABLE_OFFICIAL_NEWS": (
             "1" if runtime_config.enable_official_news else "0"
         ),
+        "AI_INVESTING_ENABLE_LLM_NEWS": (
+            "1" if runtime_config.enable_llm_news else "0"
+        ),
         "AI_INVESTING_OFFICIAL_NEWS_LOOKBACK_DAYS": str(
             runtime_config.official_news_lookback_days
         ),
         "AI_INVESTING_REQUIRE_OFFICIAL_NEWS": (
             "1" if runtime_config.require_official_news else "0"
         ),
+        "AI_INVESTING_REQUIRE_LLM_NEWS": (
+            "1" if runtime_config.require_llm_news else "0"
+        ),
         "AI_INVESTING_SEC_USER_AGENT": sec_user_agent,
+        "AI_INVESTING_LLM_NEWS_MODEL": runtime_config.llm_news_model,
+        "AI_INVESTING_OPENAI_BASE_URL": runtime_config.llm_news_base_url,
+        "AI_INVESTING_LLM_NEWS_MAX_ITEMS": str(runtime_config.llm_news_max_items),
+        "AI_INVESTING_LLM_NEWS_MAX_CHARS": str(runtime_config.llm_news_max_chars),
         "AI_INVESTING_MAX_PRICE_DRIFT_PCT": str(runtime_config.max_price_drift_pct),
     }
 

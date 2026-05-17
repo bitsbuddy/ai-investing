@@ -46,6 +46,23 @@ AI_INVESTING_RESEARCH_SNAPSHOT_PATH=examples/research_snapshot.example.json
 AI_INVESTING_SEC_USER_AGENT=AI-Investing your-email@example.com
 ```
 
+If you also want the LLM news-analysis layer:
+
+```env
+OPENAI_API_KEY=your_openai_key
+AI_INVESTING_ENABLE_LLM_NEWS=1
+AI_INVESTING_LLM_NEWS_MODEL=gpt-5-mini
+```
+
+Optional LLM news controls:
+
+```env
+AI_INVESTING_REQUIRE_LLM_NEWS=0
+AI_INVESTING_LLM_NEWS_MAX_ITEMS=8
+AI_INVESTING_LLM_NEWS_MAX_CHARS=6000
+AI_INVESTING_OPENAI_BASE_URL=https://api.openai.com/v1
+```
+
 When running commands, load your env file in your shell first or export the variables manually.
 
 Useful `paper-setup` variants:
@@ -82,6 +99,8 @@ There are 7 main commands:
 
 `research`, `signal`, and `trade` now also pull latest official-source news by default from the SEC, Federal Reserve, BLS, and Treasury.
 
+If LLM news is enabled, those commands additionally classify official-source documents with a structured model output. If the model call fails and `AI_INVESTING_REQUIRE_LLM_NEWS=0`, the system falls back to the rule-based news scorer.
+
 ## 4. Backtest It
 
 Basic backtest:
@@ -115,6 +134,12 @@ If you want to disable current official news for a one-off run:
 PYTHONPATH=src python3 -m ai_investing.cli research --research-snapshot examples/research_snapshot.example.json --no-official-news
 ```
 
+If you want official news but want to disable the LLM layer for one run:
+
+```bash
+PYTHONPATH=src python3 -m ai_investing.cli research --research-snapshot examples/research_snapshot.example.json --no-llm-news
+```
+
 ## 6. Generate Today’s Signal
 
 Without research overlay:
@@ -134,6 +159,7 @@ This prints:
 - regime (`risk_on` or `risk_off`)
 - target weights
 - official-source news context
+- optional LLM-generated news summaries when enabled
 - selected research scores when the overlay is enabled
 
 ## 7. Preview Trades Without Sending Orders

@@ -29,23 +29,39 @@ class _FakeClockClient:
         return self._clock
 
 
+def _runtime_config(**overrides) -> RuntimeConfig:
+    values = {
+        "enable_live": False,
+        "enable_official_news": True,
+        "enable_llm_news": False,
+        "state_path": Path(".ai_investing_state.json"),
+        "default_feed": "iex",
+        "risk_on_universe": ("SPY",),
+        "defensive_universe": ("TLT",),
+        "research_snapshot_path": Path("examples/research_snapshot.example.json"),
+        "research_max_age_days": 45,
+        "official_news_lookback_days": 14,
+        "require_official_news": False,
+        "require_llm_news": False,
+        "sec_user_agent": "AI-Investing tests@example.com",
+        "llm_news_api_key": "",
+        "llm_news_model": "gpt-5-mini",
+        "llm_news_base_url": "https://api.openai.com/v1",
+        "llm_news_max_items": 8,
+        "llm_news_max_chars": 6000,
+        "max_price_drift_pct": 0.02,
+    }
+    values.update(overrides)
+    return RuntimeConfig(**values)
+
+
 class CLITests(unittest.TestCase):
     def test_paper_setup_writes_env_file_with_safe_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             env_path = Path(tmpdir) / ".env.paper"
-            runtime_config = RuntimeConfig(
-                enable_live=False,
-                enable_official_news=True,
-                state_path=Path(".ai_investing_state.json"),
-                default_feed="iex",
+            runtime_config = _runtime_config(
                 risk_on_universe=("SPY", "QQQ"),
                 defensive_universe=("TLT", "IEF"),
-                research_snapshot_path=Path("examples/research_snapshot.example.json"),
-                research_max_age_days=45,
-                official_news_lookback_days=14,
-                require_official_news=False,
-                sec_user_agent="AI-Investing tests@example.com",
-                max_price_drift_pct=0.02,
             )
             broker_config = BrokerConfig(
                 api_key="paper-key",
@@ -80,20 +96,7 @@ class CLITests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             env_path = Path(tmpdir) / ".env.paper"
             env_path.write_text("ALPACA_PAPER=true\n")
-            runtime_config = RuntimeConfig(
-                enable_live=False,
-                enable_official_news=True,
-                state_path=Path(".ai_investing_state.json"),
-                default_feed="iex",
-                risk_on_universe=("SPY",),
-                defensive_universe=("TLT",),
-                research_snapshot_path=None,
-                research_max_age_days=45,
-                official_news_lookback_days=14,
-                require_official_news=False,
-                sec_user_agent="AI-Investing tests@example.com",
-                max_price_drift_pct=0.02,
-            )
+            runtime_config = _runtime_config(research_snapshot_path=None)
             broker_config = BrokerConfig(
                 api_key="",
                 secret_key="",
@@ -122,20 +125,7 @@ class CLITests(unittest.TestCase):
             cron_path = root / "automation" / "paper_trade.cron"
             control_path = root / "automation" / "paper_trade.enabled"
             status_path = root / "automation" / "paper_trade.status"
-            runtime_config = RuntimeConfig(
-                enable_live=False,
-                enable_official_news=True,
-                state_path=Path(".ai_investing_state.json"),
-                default_feed="iex",
-                risk_on_universe=("SPY",),
-                defensive_universe=("TLT",),
-                research_snapshot_path=None,
-                research_max_age_days=45,
-                official_news_lookback_days=14,
-                require_official_news=False,
-                sec_user_agent="AI-Investing tests@example.com",
-                max_price_drift_pct=0.02,
-            )
+            runtime_config = _runtime_config(research_snapshot_path=None)
             args = argparse.Namespace(
                 env_file=str(env_path),
                 script_file=str(script_path),
@@ -173,20 +163,7 @@ class CLITests(unittest.TestCase):
             self.assertIn("crontab", output.getvalue())
 
     def test_automation_trade_manual_run_falls_back_to_preview_when_market_is_closed(self) -> None:
-        runtime_config = RuntimeConfig(
-            enable_live=False,
-            enable_official_news=True,
-            state_path=Path(".ai_investing_state.json"),
-            default_feed="iex",
-            risk_on_universe=("SPY",),
-            defensive_universe=("TLT",),
-            research_snapshot_path=Path("examples/research_snapshot.example.json"),
-            research_max_age_days=45,
-            official_news_lookback_days=14,
-            require_official_news=False,
-            sec_user_agent="AI-Investing tests@example.com",
-            max_price_drift_pct=0.02,
-        )
+        runtime_config = _runtime_config()
         args = argparse.Namespace(
             command="automation-run",
             lookback_days=900,
@@ -195,8 +172,10 @@ class CLITests(unittest.TestCase):
             training_window_bars=756,
             force=False,
             no_official_news=False,
+            no_llm_news=False,
             official_news_lookback_days=None,
             require_official_news=False,
+            require_llm_news=False,
             manual=True,
             preview_only=False,
         )
@@ -214,20 +193,7 @@ class CLITests(unittest.TestCase):
         self.assertIn("Running a preview instead of submitting orders", output.getvalue())
 
     def test_automation_trade_scheduled_run_skips_when_market_is_closed(self) -> None:
-        runtime_config = RuntimeConfig(
-            enable_live=False,
-            enable_official_news=True,
-            state_path=Path(".ai_investing_state.json"),
-            default_feed="iex",
-            risk_on_universe=("SPY",),
-            defensive_universe=("TLT",),
-            research_snapshot_path=Path("examples/research_snapshot.example.json"),
-            research_max_age_days=45,
-            official_news_lookback_days=14,
-            require_official_news=False,
-            sec_user_agent="AI-Investing tests@example.com",
-            max_price_drift_pct=0.02,
-        )
+        runtime_config = _runtime_config()
         args = argparse.Namespace(
             command="automation-run",
             lookback_days=900,
@@ -236,8 +202,10 @@ class CLITests(unittest.TestCase):
             training_window_bars=756,
             force=False,
             no_official_news=False,
+            no_llm_news=False,
             official_news_lookback_days=None,
             require_official_news=False,
+            require_llm_news=False,
             manual=False,
             preview_only=False,
         )
@@ -253,20 +221,7 @@ class CLITests(unittest.TestCase):
         self.assertIn("Skipping scheduled run", output.getvalue())
 
     def test_automation_trade_preview_only_skips_market_hours_check(self) -> None:
-        runtime_config = RuntimeConfig(
-            enable_live=False,
-            enable_official_news=True,
-            state_path=Path(".ai_investing_state.json"),
-            default_feed="iex",
-            risk_on_universe=("SPY",),
-            defensive_universe=("TLT",),
-            research_snapshot_path=Path("examples/research_snapshot.example.json"),
-            research_max_age_days=45,
-            official_news_lookback_days=14,
-            require_official_news=False,
-            sec_user_agent="AI-Investing tests@example.com",
-            max_price_drift_pct=0.02,
-        )
+        runtime_config = _runtime_config()
         args = argparse.Namespace(
             command="automation-run",
             lookback_days=900,
@@ -275,8 +230,10 @@ class CLITests(unittest.TestCase):
             training_window_bars=756,
             force=False,
             no_official_news=False,
+            no_llm_news=False,
             official_news_lookback_days=None,
             require_official_news=False,
+            require_llm_news=False,
             manual=False,
             preview_only=True,
         )

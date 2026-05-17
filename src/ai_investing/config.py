@@ -47,6 +47,7 @@ class BrokerConfig:
 class RuntimeConfig:
     enable_live: bool
     enable_official_news: bool
+    enable_llm_news: bool
     state_path: Path
     default_feed: str
     risk_on_universe: tuple[str, ...]
@@ -55,7 +56,13 @@ class RuntimeConfig:
     research_max_age_days: int
     official_news_lookback_days: int
     require_official_news: bool
+    require_llm_news: bool
     sec_user_agent: str
+    llm_news_api_key: str
+    llm_news_model: str
+    llm_news_base_url: str
+    llm_news_max_items: int
+    llm_news_max_chars: int
     max_price_drift_pct: float
 
 
@@ -80,9 +87,13 @@ def load_broker_config() -> BrokerConfig:
 
 def load_runtime_config() -> RuntimeConfig:
     research_snapshot_raw = os.getenv("AI_INVESTING_RESEARCH_SNAPSHOT_PATH", "").strip()
+    llm_news_api_key = (
+        os.getenv("AI_INVESTING_OPENAI_API_KEY", os.getenv("OPENAI_API_KEY", "")).strip()
+    )
     return RuntimeConfig(
         enable_live=_bool_env("AI_INVESTING_ENABLE_LIVE", False),
         enable_official_news=_bool_env("AI_INVESTING_ENABLE_OFFICIAL_NEWS", True),
+        enable_llm_news=_bool_env("AI_INVESTING_ENABLE_LLM_NEWS", False),
         state_path=Path(
             os.getenv("AI_INVESTING_STATE_PATH", ".ai_investing_state.json")
         ),
@@ -101,6 +112,7 @@ def load_runtime_config() -> RuntimeConfig:
             "AI_INVESTING_OFFICIAL_NEWS_LOOKBACK_DAYS", 14
         ),
         require_official_news=_bool_env("AI_INVESTING_REQUIRE_OFFICIAL_NEWS", False),
+        require_llm_news=_bool_env("AI_INVESTING_REQUIRE_LLM_NEWS", False),
         sec_user_agent=(
             os.getenv(
                 "AI_INVESTING_SEC_USER_AGENT",
@@ -108,6 +120,17 @@ def load_runtime_config() -> RuntimeConfig:
             ).strip()
             or "AI-Investing research@example.com"
         ),
+        llm_news_api_key=llm_news_api_key,
+        llm_news_model=(
+            os.getenv("AI_INVESTING_LLM_NEWS_MODEL", "gpt-5-mini").strip()
+            or "gpt-5-mini"
+        ),
+        llm_news_base_url=(
+            os.getenv("AI_INVESTING_OPENAI_BASE_URL", "https://api.openai.com/v1").strip()
+            or "https://api.openai.com/v1"
+        ),
+        llm_news_max_items=_int_env("AI_INVESTING_LLM_NEWS_MAX_ITEMS", 8),
+        llm_news_max_chars=_int_env("AI_INVESTING_LLM_NEWS_MAX_CHARS", 6000),
         max_price_drift_pct=_float_env("AI_INVESTING_MAX_PRICE_DRIFT_PCT", 0.02),
     )
 

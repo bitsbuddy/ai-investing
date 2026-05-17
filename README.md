@@ -78,6 +78,7 @@ Pure quant is not enough if your goal is to approximate an institutional decisio
   - Federal Reserve press releases / RSS
   - BLS latest economic releases
   - Treasury press releases relevant to issuance and funding conditions
+  - optional LLM-based structured classification of official-source documents for more nuanced scoring
 
 The engine blends these with quant instead of replacing quant. The overlay is applied to both risk-on and defensive selection. In practice, that means:
 
@@ -107,6 +108,37 @@ PYTHONPATH=src python3 -m ai_investing.cli trade --research-snapshot examples/re
 ```
 
 Official-source news is enabled by default for `research`, `signal`, and `trade`. It is intentionally not used in `backtest`, because current news would create lookahead bias in historical results.
+
+### Optional LLM News Layer
+
+The default official-news layer is deterministic and rule-based. If you want the system to interpret release text with more nuance, you can enable the LLM overlay on top of the official-source fetchers.
+
+Set:
+
+```env
+OPENAI_API_KEY=your_openai_key
+AI_INVESTING_ENABLE_LLM_NEWS=1
+AI_INVESTING_LLM_NEWS_MODEL=gpt-5-mini
+```
+
+Optional controls:
+
+```env
+AI_INVESTING_REQUIRE_LLM_NEWS=0
+AI_INVESTING_LLM_NEWS_MAX_ITEMS=8
+AI_INVESTING_LLM_NEWS_MAX_CHARS=6000
+AI_INVESTING_OPENAI_BASE_URL=https://api.openai.com/v1
+```
+
+What it does:
+
+- fetches official-source items as before
+- pulls actual page text when available, especially Fed releases and SEC filing documents
+- asks the model for strict JSON-schema output
+- stores a short machine summary plus confidence per item
+- blends the model scores with the rule-based scores instead of blindly replacing them
+
+If the LLM call fails and `AI_INVESTING_REQUIRE_LLM_NEWS=0`, the system falls back to the rule-based official-news layer.
 
 You can also broaden the universe beyond ETFs. For example:
 
@@ -218,6 +250,8 @@ Before submission, the system checks that:
 - any partially submitted rebalance is resumed instead of duplicated
 
 The live-oriented commands also print an `Official News Context` section so you can see which reliable sources were ingested and what macro bucket scores they produced.
+
+When the LLM layer is enabled, the source status list will also include an `llm` line and the headline summaries will include the model-generated short summaries.
 
 If you hit local TLS certificate issues on macOS or another custom Python install, you can point the system at a CA bundle with `AI_INVESTING_CA_BUNDLE=/path/to/cacert.pem`. As a last resort for local paper testing only, you can set `AI_INVESTING_SSL_NO_VERIFY=1`, but that should not be your steady-state configuration.
 
