@@ -145,3 +145,4 @@ class RebalanceAction:
     notional: float
     qty: float | None
     reason: str
+    reference_price: float | None = None

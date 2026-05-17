@@ -43,6 +43,18 @@ class ResearchOverlay:
     def __init__(self, snapshot: ResearchSnapshot) -> None:
         self.snapshot = snapshot
 
+    def validate_for_date(self, decision_date: date, *, max_age_days: int) -> None:
+        if self.snapshot.as_of > decision_date:
+            raise ValueError(
+                "Research snapshot is future-dated relative to the decision date."
+            )
+        age_days = (decision_date - self.snapshot.as_of).days
+        if age_days > max_age_days:
+            raise ValueError(
+                f"Research snapshot is stale ({age_days} days old). "
+                f"Maximum allowed age is {max_age_days} days."
+            )
+
     def assess_symbol(self, symbol: str, quant_score: float) -> ResearchAssessment:
         symbol = symbol.upper()
         asset = self.snapshot.assets.get(symbol)

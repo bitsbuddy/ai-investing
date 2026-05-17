@@ -5,6 +5,20 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+def _float_env(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    return float(raw.strip())
+
+
+def _int_env(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    return int(raw.strip())
+
+
 def _bool_env(name: str, default: bool) -> bool:
     raw = os.getenv(name)
     if raw is None:
@@ -37,6 +51,8 @@ class RuntimeConfig:
     risk_on_universe: tuple[str, ...]
     defensive_universe: tuple[str, ...]
     research_snapshot_path: Path | None
+    research_max_age_days: int
+    max_price_drift_pct: float
 
 
 def load_broker_config() -> BrokerConfig:
@@ -75,6 +91,8 @@ def load_runtime_config() -> RuntimeConfig:
         research_snapshot_path=(
             Path(research_snapshot_raw) if research_snapshot_raw else None
         ),
+        research_max_age_days=_int_env("AI_INVESTING_RESEARCH_MAX_AGE_DAYS", 45),
+        max_price_drift_pct=_float_env("AI_INVESTING_MAX_PRICE_DRIFT_PCT", 0.02),
     )
 
 

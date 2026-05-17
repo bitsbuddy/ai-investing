@@ -5,7 +5,11 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from .alpaca import AlpacaClient
-from .backtest import optimize_strategy, run_backtest
+from .backtest import (
+    run_backtest,
+    run_walk_forward_backtest,
+    select_walk_forward_parameters,
+)
 from .config import (
     load_broker_config,
     load_runtime_config,
@@ -26,16 +30,19 @@ def build_parser() -> argparse.ArgumentParser:
     backtest.add_argument("--end", type=_parse_date, default=_today_utc())
     backtest.add_argument("--feed", default=None)
     backtest.add_argument("--no-optimize", action="store_true")
+    backtest.add_argument("--training-window-bars", type=int, default=756)
 
     signal = subparsers.add_parser("signal", help="Generate current target weights.")
     signal.add_argument("--lookback-days", type=int, default=900)
     signal.add_argument("--feed", default=None)
     signal.add_argument("--research-snapshot", default=None)
+    signal.add_argument("--training-window-bars", type=int, default=756)
 
     trade = subparsers.add_parser("trade", help="Preview or submit a rebalance.")
     trade.add_argument("--lookback-days", type=int, default=900)
     trade.add_argument("--feed", default=None)
     trade.add_argument("--research-snapshot", default=None)
+    trade.add_argument("--training-window-bars", type=int, default=756)
     trade.add_argument("--submit", action="store_true")
     trade.add_argument("--force", action="store_true")
 
@@ -45,6 +52,7 @@ def build_parser() -> argparse.ArgumentParser:
     research.add_argument("--lookback-days", type=int, default=900)
     research.add_argument("--feed", default=None)
     research.add_argument("--research-snapshot", default=None)
+    research.add_argument("--training-window-bars", type=int, default=756)
 
     return parser
 
@@ -95,13 +103,17 @@ def _run_backtest_command(
             params=base_params,
         )
         result = run_backtest(history, strategy)
+        print("Selection mode: fixed parameters")
     else:
-        result = optimize_strategy(
+        result = run_walk_forward_backtest(
             history,
             risk_on_universe=runtime_config.risk_on_universe,
             defensive_universe=runtime_config.defensive_universe,
             base_params=base_params,
+            training_window=args.training_window_bars,
         )
+        print("Selection mode: walk-forward optimization")
+    print("")
 
     print("Best Parameters")
     print(result.params)
@@ -125,6 +137,7 @@ def _run_signal_command(
         lookback_days=args.lookback_days,
         feed=args.feed or runtime_config.default_feed,
         research_snapshot_path=_resolve_research_snapshot_path(runtime_config, args),
+        training_window_bars=args.training_window_bars,
     )
     print(f"Using parameters: {params}")
     _print_signal(signal)
@@ -149,6 +162,7 @@ def _run_trade_command(
         lookback_days=args.lookback_days,
         feed=args.feed or runtime_config.default_feed,
         research_snapshot_path=_resolve_research_snapshot_path(runtime_config, args),
+        training_window_bars=args.training_window_bars,
     )
     latest_prices = {
         symbol: closes[signal_index] for symbol, closes in history.closes.items()
@@ -162,6 +176,8 @@ def _run_trade_command(
         is_paper=is_paper,
         submit=args.submit,
         force=args.force,
+        live_price_feed=args.feed or runtime_config.default_feed,
+        max_price_drift_pct=runtime_config.max_price_drift_pct,
     )
 
     print(f"Using parameters: {params}")
@@ -201,6 +217,7 @@ def _run_research_command(
         lookback_days=args.lookback_days,
         feed=args.feed or runtime_config.default_feed,
         research_snapshot_path=research_snapshot_path,
+        training_window_bars=args.training_window_bars,
     )
     print(f"Using parameters: {params}")
     _print_signal(signal)
@@ -215,6 +232,7 @@ def _compute_latest_signal(
     lookback_days: int,
     feed: str,
     research_snapshot_path: Path | None = None,
+    training_window_bars: int = 756,
 ):
     end = _today_utc()
     start = end - timedelta(days=lookback_days)
@@ -230,12 +248,22 @@ def _compute_latest_signal(
         end=end,
         feed=feed,
     )
+    signal_index = len(history.dates) - 1
+    if history.dates[signal_index] >= _today_utc():
+        signal_index -= 1
     research_overlay = _load_research_overlay(research_snapshot_path)
-    best_result = optimize_strategy(
+    if research_overlay is not None:
+        research_overlay.validate_for_date(
+            history.dates[signal_index],
+            max_age_days=runtime_config.research_max_age_days,
+        )
+    best_result = select_walk_forward_parameters(
         history,
         risk_on_universe=runtime_config.risk_on_universe,
         defensive_universe=runtime_config.defensive_universe,
         base_params=StrategyParameters(),
+        signal_index=signal_index,
+        training_window=training_window_bars,
     )
     strategy = ETFMomentumStrategy(
         risk_on_universe=runtime_config.risk_on_universe,
@@ -243,9 +271,6 @@ def _compute_latest_signal(
         params=best_result.params,
         research_overlay=research_overlay,
     )
-    signal_index = len(history.dates) - 1
-    if history.dates[signal_index] >= _today_utc() and signal_index > strategy.warmup_bars:
-        signal_index -= 1
     signal = strategy.signal_for_index(history, signal_index)
     return signal, history, best_result.params, signal_index
 
@@ -309,6 +334,11 @@ def _format_assessment_line(assessment) -> str:
         f"{name}={score:.2f}"
         for name, score in sorted(assessment.component_scores.items())
     ]
+    research = (
+        f" | research={assessment.research_score:.2f}"
+        if assessment.research_score is not None
+        else ""
+    )
     benchmark = (
         f" | benchmark={assessment.benchmark_index}"
         if assessment.benchmark_index
@@ -316,7 +346,7 @@ def _format_assessment_line(assessment) -> str:
     )
     return (
         f"- {assessment.symbol}: total={assessment.total_score:.2f}"
-        f" | {' '.join(component_parts)}{benchmark}"
+        f"{research} | {' '.join(component_parts)}{benchmark}"
     )
 
 

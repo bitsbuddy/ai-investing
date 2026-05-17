@@ -17,7 +17,7 @@ IBKR remains a stronger choice if you need broader global market access or more 
 
 - Fetches daily historical data from Alpaca Market Data.
 - Runs an ETF momentum and trend-following strategy with a defensive regime.
-- Backtests multiple parameter sets and selects the highest-scoring configuration.
+- Uses walk-forward parameter selection instead of full-sample parameter fitting.
 - Optionally overlays company, index, and ETF research onto the signal engine.
 - Generates target portfolio weights for the current session.
 - Rebalances an Alpaca account with guardrails:
@@ -27,6 +27,9 @@ IBKR remains a stronger choice if you need broader global market access or more 
   - max position size
   - drawdown kill switch
   - duplicate rebalance prevention
+  - buying-power checks
+  - market-price drift checks before submission
+  - resumable order batches after partial failures
 
 ## Strategy
 
@@ -71,7 +74,7 @@ Pure quant is not enough if your goal is to approximate an institutional decisio
   - recent flows
   - look-through portfolio quality and valuation
 
-The engine blends these with quant instead of replacing quant. In practice, that means:
+The engine blends these with quant instead of replacing quant. The overlay is applied to both risk-on and defensive selection. In practice, that means:
 
 1. Quant tells you what is working.
 2. Index analysis tells you whether the backdrop supports taking risk.
@@ -83,6 +86,11 @@ This is closer to how large investment firms think, but it is still a compact re
 ## Research Snapshot
 
 Use [examples/research_snapshot.example.json](/Users/rishik/AI-Investing/examples/research_snapshot.example.json:1) as the template. The file is point-in-time and intended for live decision support. Ratios and percentages are entered as decimals, for example `0.15` for `15%`.
+
+The snapshot is validated before use:
+
+- future-dated snapshots are rejected
+- stale snapshots are rejected based on `AI_INVESTING_RESEARCH_MAX_AGE_DAYS`
 
 Example commands:
 
@@ -112,6 +120,8 @@ If you do that, provide company metrics for those equities in the research snaps
 PYTHONPATH=src python3 -m ai_investing.cli backtest --start 2021-01-01 --end 2026-05-16
 ```
 
+This optimized backtest now uses walk-forward parameter reselection instead of choosing one parameter set on the full sample.
+
 ### Generate Today's Target Weights
 
 ```bash
@@ -135,6 +145,12 @@ PYTHONPATH=src python3 -m ai_investing.cli trade
 ```bash
 PYTHONPATH=src python3 -m ai_investing.cli trade --submit
 ```
+
+Before submission, the system checks that:
+
+- current market prices have not drifted too far from the signal reference prices
+- the rebalance fits within buying power and expected sell proceeds
+- any partially submitted rebalance is resumed instead of duplicated
 
 ### Enable Live Trading
 
@@ -170,6 +186,7 @@ Example cron schedule for weekday runs at 9:40am New York time:
 - The strategy is long-only and ETF-heavy by default, though the universe can include equities.
 - The order executor is designed for low-frequency rebalancing, not day trading or HFT.
 - Market data access still requires Alpaca API credentials in this implementation.
+- The pre-trade drift guard uses latest trade prices, not full order book simulation.
 - The research overlay is point-in-time. Historical backtesting of fundamentals, macro, and ETF structure requires properly time-aligned historical snapshots to avoid lookahead bias.
 
 ## References

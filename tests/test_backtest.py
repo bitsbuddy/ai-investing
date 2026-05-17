@@ -3,7 +3,11 @@ from __future__ import annotations
 import unittest
 from datetime import date, timedelta
 
-from ai_investing.backtest import optimize_strategy, run_backtest
+from ai_investing.backtest import (
+    optimize_strategy,
+    run_backtest,
+    run_walk_forward_backtest,
+)
 from ai_investing.models import StrategyParameters
 from ai_investing.strategy import ETFMomentumStrategy, align_history
 
@@ -63,6 +67,20 @@ class BacktestTests(unittest.TestCase):
 
         self.assertIn(result.params.rebalance_frequency, {"weekly", "monthly"})
         self.assertNotEqual(result.score, 0)
+
+    def test_walk_forward_backtest_returns_metrics(self) -> None:
+        history = align_history(_build_history())
+        result = run_walk_forward_backtest(
+            history,
+            risk_on_universe=("SPY", "QQQ", "IWM", "EFA", "EEM"),
+            defensive_universe=("TLT", "IEF", "GLD", "SHY"),
+            base_params=StrategyParameters(),
+            training_window=252,
+        )
+
+        self.assertGreater(result.total_return, 0)
+        self.assertGreater(result.cagr, 0)
+        self.assertGreaterEqual(result.max_drawdown, 0)
 
 
 if __name__ == "__main__":

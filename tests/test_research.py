@@ -110,6 +110,21 @@ class ResearchTests(unittest.TestCase):
         self.assertTrue(overlay.eligible_for_risk_on(spy))
         self.assertFalse(overlay.eligible_for_risk_on(qqq))
 
+    def test_overlay_rejects_stale_and_future_snapshots(self) -> None:
+        snapshot = """{
+  "as_of": "2026-05-17",
+  "assets": {}
+}"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "snapshot.json"
+            path.write_text(snapshot)
+            overlay = ResearchOverlay(load_research_snapshot(path))
+
+        with self.assertRaisesRegex(ValueError, "future-dated"):
+            overlay.validate_for_date(date(2026, 5, 16), max_age_days=45)
+        with self.assertRaisesRegex(ValueError, "stale"):
+            overlay.validate_for_date(date(2026, 8, 1), max_age_days=30)
+
     def test_strategy_uses_research_overlay_to_override_pure_momentum(self) -> None:
         snapshot = """{
   "as_of": "2026-05-17",
@@ -190,6 +205,103 @@ class ResearchTests(unittest.TestCase):
         self.assertEqual(signal.regime, "risk_on")
         self.assertIn("SPY", signal.weights)
         self.assertNotIn("QQQ", signal.weights)
+
+    def test_defensive_assets_are_also_filtered_by_research(self) -> None:
+        snapshot = """{
+  "as_of": "2026-05-17",
+  "weights": {
+    "quant": 0.35,
+    "company": 0.30,
+    "index": 0.20,
+    "etf": 0.15,
+    "minimum_total_score": 0.60
+  },
+  "assets": {
+    "TLT": {
+      "asset_type": "etf",
+      "benchmark_index": "UST20",
+      "etf": {
+        "expense_ratio": 0.0090,
+        "assets_under_management_billion": 2.0,
+        "average_daily_dollar_volume_billion": 0.05,
+        "tracking_error": 0.0180,
+        "flow_1m_percent": -0.03,
+        "flow_3m_percent": -0.08,
+        "portfolio_quality_score": 0.20,
+        "portfolio_valuation_score": 0.20
+      }
+    },
+    "IEF": {
+      "asset_type": "etf",
+      "benchmark_index": "UST7_10",
+      "etf": {
+        "expense_ratio": 0.0090,
+        "assets_under_management_billion": 2.0,
+        "average_daily_dollar_volume_billion": 0.05,
+        "tracking_error": 0.0180,
+        "flow_1m_percent": -0.03,
+        "flow_3m_percent": -0.08,
+        "portfolio_quality_score": 0.20,
+        "portfolio_valuation_score": 0.20
+      }
+    },
+    "UST20": {
+      "asset_type": "index",
+      "index": {
+        "breadth_percent_above_200dma": 0.35,
+        "trend_score": 0.30,
+        "relative_strength_score": 0.25,
+        "volatility_percentile": 0.80,
+        "credit_spread_percentile": 0.80,
+        "yield_curve_slope_bps": -60.0
+      }
+    },
+    "UST7_10": {
+      "asset_type": "index",
+      "index": {
+        "breadth_percent_above_200dma": 0.35,
+        "trend_score": 0.30,
+        "relative_strength_score": 0.25,
+        "volatility_percentile": 0.80,
+        "credit_spread_percentile": 0.80,
+        "yield_curve_slope_bps": -60.0
+      }
+    }
+  }
+}"""
+        start = date(2023, 1, 2)
+        length = 320
+        prices = {
+            "SPY": _series(100, -0.0010, length),
+            "QQQ": _series(100, -0.0012, length),
+            "TLT": _series(100, 0.0008, length),
+            "IEF": _series(100, 0.0006, length),
+        }
+        history = align_history(
+            {
+                symbol: {
+                    start + timedelta(days=index): price
+                    for index, price in enumerate(series)
+                }
+                for symbol, series in prices.items()
+            }
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "snapshot.json"
+            path.write_text(snapshot)
+            overlay = ResearchOverlay(load_research_snapshot(path))
+
+            strategy = ETFMomentumStrategy(
+                risk_on_universe=("SPY", "QQQ"),
+                defensive_universe=("TLT", "IEF"),
+                params=StrategyParameters(top_n=1, defensive_count=1),
+                research_overlay=overlay,
+            )
+            signal = strategy.signal_for_index(history, len(history.dates) - 1)
+
+        self.assertEqual(signal.regime, "risk_off")
+        self.assertEqual(signal.weights, {})
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@ from dataclasses import dataclass, replace
 from datetime import date
 from statistics import mean, pstdev
 
-from .models import AlignedHistory, Signal, StrategyParameters
+from .models import AlignedHistory, ResearchAssessment, Signal, StrategyParameters
 from .research import ResearchOverlay
 
 
@@ -77,7 +77,7 @@ class ETFMomentumStrategy:
         risk_on_candidates: list[_Candidate] = []
         defensive_candidates: list[_Candidate] = []
         diagnostics: dict[str, float | str] = {}
-        assessments = {}
+        assessments: dict[str, ResearchAssessment] = {}
 
         for symbol in self.risk_on_universe:
             price = history.closes[symbol][index]
@@ -102,14 +102,19 @@ class ETFMomentumStrategy:
         eligible_risk_on = [
             candidate
             for candidate in ranked_risk_on
-            if self._risk_on_candidate_is_allowed(candidate.symbol, assessments)
+            if self._candidate_is_allowed(candidate.symbol, assessments)
+        ]
+        eligible_defensive = [
+            candidate
+            for candidate in ranked_defensive
+            if self._candidate_is_allowed(candidate.symbol, assessments)
         ]
 
         if len(eligible_risk_on) >= self.params.top_n:
             selected = eligible_risk_on[: self.params.top_n]
             regime = "risk_on"
         else:
-            selected = ranked_defensive[: self.params.defensive_count]
+            selected = eligible_defensive[: self.params.defensive_count]
             regime = "risk_off"
 
         raw_weights = {
@@ -177,7 +182,7 @@ class ETFMomentumStrategy:
     def _rank_candidates(
         self,
         candidates: list[_Candidate],
-        assessments: dict[str, object],
+        assessments: dict[str, ResearchAssessment],
     ) -> list[_RankedCandidate]:
         if not candidates:
             return []
@@ -205,8 +210,8 @@ class ETFMomentumStrategy:
             )
         return sorted(ranked, key=lambda item: item.combined_score, reverse=True)
 
-    def _risk_on_candidate_is_allowed(
-        self, symbol: str, assessments: dict[str, object]
+    def _candidate_is_allowed(
+        self, symbol: str, assessments: dict[str, ResearchAssessment]
     ) -> bool:
         if self.research_overlay is None:
             return True
