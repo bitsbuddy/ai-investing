@@ -52,6 +52,20 @@ class StrategyTests(unittest.TestCase):
         self.assertIn("SPY", signal.weights)
         self.assertLess(sum(signal.weights.values()), 1.0)
 
+    def test_align_history_does_not_truncate_for_late_starting_symbols(self) -> None:
+        history = _build_history()
+        late_start = {
+            current_date: price
+            for current_date, price in list(history["QQQ"].items())[120:]
+        }
+        history["NEW"] = late_start
+
+        aligned = align_history(history)
+
+        self.assertEqual(aligned.dates[0], min(history["SPY"]))
+        self.assertIsNone(aligned.closes["NEW"][0])
+        self.assertEqual(len(aligned.dates), len(history["SPY"]))
+
 
 if __name__ == "__main__":
     unittest.main()

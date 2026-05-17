@@ -143,6 +143,14 @@ class AlpacaClient:
             allow_not_found=True,
         )
 
+    def get_order_by_id(self, order_id: str) -> dict[str, Any] | None:
+        return self._request(
+            base_url=self._config.trading_base_url,
+            method="GET",
+            path=f"/v2/orders/{order_id}",
+            allow_not_found=True,
+        )
+
     def get_daily_closes(
         self,
         *,

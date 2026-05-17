@@ -61,6 +61,18 @@ def main() -> None:
     args = build_parser().parse_args()
     broker_config = load_broker_config()
     runtime_config = load_runtime_config()
+
+    if args.command == "research":
+        research_snapshot_path = _resolve_research_snapshot_path(runtime_config, args)
+        if _has_broker_credentials(broker_config):
+            client = AlpacaClient(broker_config)
+            _run_research_command(
+                client, runtime_config, args, research_snapshot_path=research_snapshot_path
+            )
+            return
+        _run_snapshot_only_research(runtime_config, research_snapshot_path)
+        return
+
     require_broker_credentials(broker_config)
     client = AlpacaClient(broker_config)
 
@@ -72,9 +84,6 @@ def main() -> None:
         return
     if args.command == "trade":
         _run_trade_command(client, broker_config.paper, runtime_config, args)
-        return
-    if args.command == "research":
-        _run_research_command(client, runtime_config, args)
         return
     raise ValueError(f"Unsupported command: {args.command}")
 
@@ -115,7 +124,7 @@ def _run_backtest_command(
         print("Selection mode: walk-forward optimization")
     print("")
 
-    print("Best Parameters")
+    print("Final Active Parameters")
     print(result.params)
     print("")
     print("Performance")
@@ -204,9 +213,12 @@ def _run_trade_command(
 
 
 def _run_research_command(
-    client: AlpacaClient, runtime_config, args: argparse.Namespace
+    client: AlpacaClient,
+    runtime_config,
+    args: argparse.Namespace,
+    *,
+    research_snapshot_path: Path | None,
 ) -> None:
-    research_snapshot_path = _resolve_research_snapshot_path(runtime_config, args)
     if research_snapshot_path is None:
         raise RuntimeError(
             "Research mode requires a snapshot file. Set AI_INVESTING_RESEARCH_SNAPSHOT_PATH or pass --research-snapshot."
@@ -224,6 +236,26 @@ def _run_research_command(
     print("")
     print("Research Scorecard")
     _print_all_research(signal)
+
+
+def _run_snapshot_only_research(runtime_config, research_snapshot_path: Path | None) -> None:
+    if research_snapshot_path is None:
+        raise RuntimeError(
+            "Research mode without broker credentials requires a local research snapshot."
+        )
+    overlay = _load_research_overlay(research_snapshot_path)
+    assert overlay is not None
+    print("Mode: research snapshot only")
+    print("Quant component: neutral 0.50")
+    print("")
+    assessments = [
+        overlay.assess_symbol(symbol, 0.5)
+        for symbol in sorted(overlay.snapshot.assets)
+    ]
+    for assessment in sorted(
+        assessments, key=lambda item: item.total_score, reverse=True
+    ):
+        print(_format_assessment_line(assessment))
 
 
 def _compute_latest_signal(
@@ -357,6 +389,10 @@ def _load_research_overlay(
         return None
     snapshot = load_research_snapshot(research_snapshot_path)
     return ResearchOverlay(snapshot)
+
+
+def _has_broker_credentials(broker_config) -> bool:
+    return bool(broker_config.api_key and broker_config.secret_key)
 
 
 def _resolve_research_snapshot_path(

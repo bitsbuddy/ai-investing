@@ -10,20 +10,35 @@ from ai_investing.models import AccountSnapshot, Position, Signal
 
 
 class _FakeClient:
-    def __init__(self, *, fail_on_call: int | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        fail_on_call: int | None = None,
+        submitted_order_status: str = "filled",
+    ) -> None:
         self.fail_on_call = fail_on_call
+        self.submitted_order_status = submitted_order_status
         self.submit_calls = 0
         self.orders_by_client_order_id: dict[str, dict[str, object]] = {}
+        self.positions: dict[str, float] = {}
+        self.prices = {"SPY": 100.0, "QQQ": 200.0}
 
     def get_account(self) -> AccountSnapshot:
         return AccountSnapshot(equity=100000.0, cash=100000.0, buying_power=100000.0)
 
     def get_positions(self) -> list[Position]:
-        return []
+        return [
+            Position(
+                symbol=symbol,
+                qty=qty,
+                market_value=qty * self.prices[symbol],
+            )
+            for symbol, qty in self.positions.items()
+            if qty > 0
+        ]
 
     def get_latest_trade_prices(self, *, symbols: list[str], feed: str) -> dict[str, float]:
-        prices = {"SPY": 100.0, "QQQ": 200.0}
-        return {symbol: prices[symbol] for symbol in symbols}
+        return {symbol: self.prices[symbol] for symbol in symbols}
 
     def get_order_by_client_order_id(self, client_order_id: str) -> dict[str, object] | None:
         return self.orders_by_client_order_id.get(client_order_id)
@@ -47,7 +62,21 @@ class _FakeClient:
             "qty": qty,
             "notional": notional,
             "client_order_id": client_order_id,
+            "status": self.submitted_order_status,
+            "filled_qty": "0",
         }
+        if self.submitted_order_status == "filled":
+            filled_qty = qty
+            if filled_qty is None and notional is not None:
+                filled_qty = notional / self.prices[symbol]
+            assert filled_qty is not None
+            response["filled_qty"] = f"{filled_qty:.6f}"
+            if side == "buy":
+                self.positions[symbol] = self.positions.get(symbol, 0.0) + filled_qty
+            else:
+                self.positions[symbol] = max(
+                    0.0, self.positions.get(symbol, 0.0) - filled_qty
+                )
         if client_order_id is not None:
             self.orders_by_client_order_id[client_order_id] = response
         return response
@@ -95,6 +124,7 @@ class ExecutionTests(unittest.TestCase):
             second_client.orders_by_client_order_id.update(
                 first_client.orders_by_client_order_id
             )
+            second_client.positions.update(first_client.positions)
             actions, responses, final_state = execute_rebalance(
                 client=second_client,
                 signal=signal,
@@ -108,10 +138,40 @@ class ExecutionTests(unittest.TestCase):
                 max_price_drift_pct=0.02,
             )
 
-            self.assertEqual(len(actions), 2)
+            self.assertEqual(len(actions), 0)
             self.assertEqual(len(responses), 1)
             self.assertIsNone(final_state.pending_rebalance)
             self.assertEqual(final_state.last_rebalance_date, "2026-05-16")
+
+    def test_execute_rebalance_keeps_open_orders_pending(self) -> None:
+        signal = Signal(
+            as_of=date(2026, 5, 16),
+            regime="risk_on",
+            weights={"SPY": 0.40},
+            diagnostics={},
+        )
+        latest_prices = {"SPY": 100.0}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_path = Path(tmpdir) / "state.json"
+            client = _FakeClient(submitted_order_status="new")
+            actions, responses, final_state = execute_rebalance(
+                client=client,
+                signal=signal,
+                state_path=state_path,
+                latest_prices=latest_prices,
+                allow_live=False,
+                is_paper=True,
+                submit=True,
+                force=False,
+                live_price_feed="iex",
+                max_price_drift_pct=0.02,
+            )
+
+            self.assertEqual(len(actions), 1)
+            self.assertEqual(len(responses), 1)
+            self.assertIsNotNone(final_state.pending_rebalance)
+            self.assertIsNone(final_state.last_rebalance_date)
 
 
 if __name__ == "__main__":

@@ -33,13 +33,9 @@ def align_history(price_history: dict[str, dict[date, float]]) -> AlignedHistory
     if not non_empty:
         raise ValueError("Price history contains no bars.")
 
-    common_dates = set.intersection(*(set(series.keys()) for series in non_empty.values()))
-    if not common_dates:
-        raise ValueError("Symbols do not share a common trading calendar.")
-
-    ordered_dates = sorted(common_dates)
+    ordered_dates = sorted(set().union(*(series.keys() for series in non_empty.values())))
     closes = {
-        symbol: [series[current_date] for current_date in ordered_dates]
+        symbol: [series.get(current_date) for current_date in ordered_dates]
         for symbol, series in non_empty.items()
     }
     return AlignedHistory(dates=ordered_dates, closes=closes)
@@ -80,10 +76,18 @@ class ETFMomentumStrategy:
         assessments: dict[str, ResearchAssessment] = {}
 
         for symbol in self.risk_on_universe:
-            price = history.closes[symbol][index]
-            trend = self._sma(history.closes[symbol], index, self.params.trend_window)
-            score = self._momentum_score(history.closes[symbol], index)
-            volatility = self._volatility(history.closes[symbol], index)
+            closes = history.closes[symbol]
+            price = closes[index]
+            score = self._momentum_score(closes, index)
+            trend = self._sma(closes, index, self.params.trend_window)
+            volatility = self._volatility(closes, index)
+            if (
+                price is None
+                or score is None
+                or trend is None
+                or volatility is None
+            ):
+                continue
             diagnostics[f"{symbol}_raw_score"] = round(score, 6)
             if price > trend and score > 0:
                 risk_on_candidates.append(
@@ -91,8 +95,11 @@ class ETFMomentumStrategy:
                 )
 
         for symbol in self.defensive_universe:
-            score = self._momentum_score(history.closes[symbol], index)
-            volatility = self._volatility(history.closes[symbol], index)
+            closes = history.closes[symbol]
+            score = self._momentum_score(closes, index)
+            volatility = self._volatility(closes, index)
+            if score is None or volatility is None:
+                continue
             defensive_candidates.append(
                 _Candidate(symbol=symbol, raw_score=score, volatility=volatility)
             )
@@ -220,26 +227,33 @@ class ETFMomentumStrategy:
             return True
         return self.research_overlay.eligible_for_risk_on(assessment)
 
-    def _momentum_score(self, closes: list[float], index: int) -> float:
+    def _momentum_score(self, closes: list[float | None], index: int) -> float | None:
         score = 0.0
         for window, weight in zip(
             self.params.momentum_windows, self.params.momentum_weights, strict=True
         ):
             current_price = closes[index]
             previous_price = closes[index - window]
+            if current_price is None or previous_price is None:
+                return None
             score += ((current_price / previous_price) - 1.0) * weight
         return score
 
     @staticmethod
-    def _sma(closes: list[float], index: int, window: int) -> float:
-        return mean(closes[index - window + 1 : index + 1])
+    def _sma(closes: list[float | None], index: int, window: int) -> float | None:
+        window_values = closes[index - window + 1 : index + 1]
+        if any(value is None for value in window_values):
+            return None
+        return mean(value for value in window_values if value is not None)
 
-    def _volatility(self, closes: list[float], index: int) -> float:
+    def _volatility(self, closes: list[float | None], index: int) -> float | None:
         returns = []
         start = index - self.params.volatility_window + 1
         for current_index in range(start, index + 1):
             prior = closes[current_index - 1]
             current = closes[current_index]
+            if prior is None or current is None:
+                return None
             returns.append((current / prior) - 1.0)
         return pstdev(returns) * math.sqrt(252)
 

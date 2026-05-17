@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -38,6 +40,14 @@ class PendingRebalanceState:
     actions: list[PendingOrderState]
 
 
+@dataclass(frozen=True)
+class PendingRebalanceStatus:
+    has_open_orders: bool
+    completed_actions: int
+    open_actions: int
+    terminal_actions: int
+
+
 @dataclass
 class RuntimeState:
     high_water_mark: float = 0.0
@@ -59,7 +69,13 @@ def load_state(path: Path) -> RuntimeState:
 
 def save_state(path: Path, state: RuntimeState) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(_state_to_payload(state), indent=2, sort_keys=True) + "\n")
+    payload = json.dumps(_state_to_payload(state), indent=2, sort_keys=True) + "\n"
+    with tempfile.NamedTemporaryFile(
+        "w", dir=path.parent, delete=False, encoding="utf-8"
+    ) as handle:
+        handle.write(payload)
+        temp_name = handle.name
+    os.replace(temp_name, path)
 
 
 def plan_rebalance(
@@ -138,7 +154,6 @@ def execute_rebalance(
     max_drawdown: float = 0.20,
 ) -> tuple[list[RebalanceAction], list[dict[str, object]], RuntimeState]:
     account = client.get_account()
-    positions = client.get_positions()
     state = load_state(state_path)
     state.high_water_mark = max(state.high_water_mark, account.equity)
 
@@ -151,6 +166,17 @@ def execute_rebalance(
         )
 
     signal_date = signal.as_of.isoformat()
+    pending_status: PendingRebalanceStatus | None = None
+    if state.pending_rebalance is not None:
+        pending_status = _reconcile_pending_rebalance(client, state.pending_rebalance)
+        save_state(state_path, state)
+        if pending_status.has_open_orders:
+            actions = [order.to_action() for order in state.pending_rebalance.actions]
+            return actions, [], state
+        state.pending_rebalance = None
+        save_state(state_path, state)
+
+    positions = client.get_positions()
     current_positions = {position.symbol: position.qty for position in positions}
     current_market_values = {
         position.symbol: position.market_value for position in positions
@@ -162,65 +188,55 @@ def execute_rebalance(
         current_market_values=current_market_values,
         latest_prices=latest_prices,
     )
-    pending_rebalance = _resolve_pending_rebalance(
+    _ensure_pending_rebalance_matches_signal(
         state=state,
         signal=signal,
         planned_actions=planned_actions,
         force=force,
     )
 
-    if pending_rebalance is None and not force and state.last_rebalance_date == signal_date:
+    if not force and state.last_rebalance_date == signal_date and pending_status is None:
         return [], [], state
 
-    actions = (
-        [order.to_action() for order in pending_rebalance.actions]
-        if pending_rebalance is not None
-        else planned_actions
-    )
-
-    if not submit:
-        return actions, [], state
-
-    if not actions:
+    if not planned_actions:
         state.last_rebalance_date = signal_date
         save_state(state_path, state)
         return [], [], state
+
+    if not submit:
+        return planned_actions, [], state
 
     if not is_paper and not allow_live:
         raise RuntimeError(
             "Live trading is blocked. Set AI_INVESTING_ENABLE_LIVE=1 to allow it."
         )
 
-    if pending_rebalance is None:
-        pending_rebalance = _build_pending_rebalance(signal, actions)
-        state.pending_rebalance = pending_rebalance
-        save_state(state_path, state)
+    pending_rebalance = _build_pending_rebalance(signal, planned_actions)
+    state.pending_rebalance = pending_rebalance
+    save_state(state_path, state)
 
     _validate_rebalance_capacity(
         account,
-        [order.to_action() for order in pending_rebalance.actions],
+        planned_actions,
         max_price_drift_pct=max_price_drift_pct,
     )
     live_prices = client.get_latest_trade_prices(
-        symbols=sorted({order.symbol for order in pending_rebalance.actions}),
+        symbols=sorted({action.symbol for action in planned_actions}),
         feed=live_price_feed,
     )
     _validate_price_drift(
-        [order.to_action() for order in pending_rebalance.actions],
+        planned_actions,
         live_prices,
         max_price_drift_pct=max_price_drift_pct,
     )
 
     responses: list[dict[str, object]] = []
     for order in pending_rebalance.actions:
-        if order.submitted_order_id:
-            continue
-
-        existing_order = client.get_order_by_client_order_id(order.client_order_id)
+        existing_order = _get_existing_order(client, order)
         if existing_order is not None:
             order.submitted_order_id = str(existing_order.get("id", ""))
-            save_state(state_path, state)
             responses.append(existing_order)
+            save_state(state_path, state)
             continue
 
         response = client.submit_market_order(
@@ -234,24 +250,43 @@ def execute_rebalance(
         save_state(state_path, state)
         responses.append(response)
 
-    state.pending_rebalance = None
-    state.last_rebalance_date = signal_date
+    pending_status = _reconcile_pending_rebalance(client, pending_rebalance)
     save_state(state_path, state)
-    return actions, responses, state
+    if not pending_status.has_open_orders:
+        state.pending_rebalance = None
+        save_state(state_path, state)
+        positions = client.get_positions()
+        current_positions = {position.symbol: position.qty for position in positions}
+        current_market_values = {
+            position.symbol: position.market_value for position in positions
+        }
+        residual_actions = plan_rebalance(
+            equity=account.equity,
+            signal=signal,
+            current_positions=current_positions,
+            current_market_values=current_market_values,
+            latest_prices=latest_prices,
+        )
+        if not residual_actions:
+            state.last_rebalance_date = signal_date
+            save_state(state_path, state)
+        return residual_actions, responses, state
+
+    return planned_actions, responses, state
 
 
-def _resolve_pending_rebalance(
+def _ensure_pending_rebalance_matches_signal(
     *,
     state: RuntimeState,
     signal: Signal,
     planned_actions: list[RebalanceAction],
     force: bool,
-) -> PendingRebalanceState | None:
+) -> None:
     pending = state.pending_rebalance
     if pending is None:
-        return None
+        return
     if force:
-        return pending
+        return
 
     signal_date = signal.as_of.isoformat()
     if pending.signal_date != signal_date:
@@ -264,7 +299,7 @@ def _resolve_pending_rebalance(
         raise RuntimeError(
             "Pending rebalance does not match the newly planned actions. Review manually before retrying."
         )
-    return pending
+    return
 
 
 def _build_pending_rebalance(
@@ -310,6 +345,47 @@ def _build_rebalance_id(signal: Signal, actions: list[RebalanceAction]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:20]
 
 
+def _get_existing_order(
+    client: AlpacaClient, order: PendingOrderState
+) -> dict[str, object] | None:
+    existing_order = client.get_order_by_client_order_id(order.client_order_id)
+    if existing_order is not None:
+        return existing_order
+    if order.submitted_order_id:
+        return client.get_order_by_id(order.submitted_order_id)
+    return None
+
+
+def _reconcile_pending_rebalance(
+    client: AlpacaClient, pending_rebalance: PendingRebalanceState
+) -> PendingRebalanceStatus:
+    open_actions = 0
+    terminal_actions = 0
+    completed_actions = 0
+    for order in pending_rebalance.actions:
+        if order.submitted_order_id is None:
+            continue
+        existing_order = _get_existing_order(client, order)
+        if existing_order is None:
+            raise RuntimeError(
+                f"Unable to reconcile previously submitted order {order.client_order_id}."
+            )
+        order.submitted_order_id = str(existing_order.get("id", order.submitted_order_id))
+        status = str(existing_order.get("status", "")).lower()
+        if _is_order_open(status, existing_order):
+            open_actions += 1
+        else:
+            terminal_actions += 1
+            if _is_order_completed(existing_order):
+                completed_actions += 1
+    return PendingRebalanceStatus(
+        has_open_orders=open_actions > 0,
+        completed_actions=completed_actions,
+        open_actions=open_actions,
+        terminal_actions=terminal_actions,
+    )
+
+
 def _validate_rebalance_capacity(
     account: AccountSnapshot,
     actions: list[RebalanceAction],
@@ -351,6 +427,30 @@ def _validate_price_drift(
             raise RuntimeError(
                 f"Price drift for {action.symbol} is {drift_pct:.2%}, which exceeds the allowed {max_price_drift_pct:.2%}."
             )
+
+
+def _is_order_open(status: str, order_payload: dict[str, object]) -> bool:
+    if status == "filled":
+        return False
+    if status == "calculated" and _is_order_completed(order_payload):
+        return False
+    return status not in {"canceled", "expired", "rejected", "replaced"}
+
+
+def _is_order_completed(order_payload: dict[str, object]) -> bool:
+    status = str(order_payload.get("status", "")).lower()
+    if status == "filled":
+        return True
+    filled_qty_raw = order_payload.get("filled_qty")
+    qty_raw = order_payload.get("qty")
+    if filled_qty_raw is None or qty_raw is None:
+        return False
+    try:
+        filled_qty = float(filled_qty_raw)
+        qty = float(qty_raw)
+    except (TypeError, ValueError):
+        return False
+    return qty > 0 and filled_qty >= qty
 
 
 def _load_pending_rebalance(

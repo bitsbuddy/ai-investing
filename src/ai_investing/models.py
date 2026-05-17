@@ -93,7 +93,7 @@ class ResearchAssessment:
 @dataclass(frozen=True)
 class AlignedHistory:
     dates: list[date]
-    closes: dict[str, list[float]]
+    closes: dict[str, list[float | None]]
 
 
 @dataclass(frozen=True)

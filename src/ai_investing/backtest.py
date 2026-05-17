@@ -252,6 +252,10 @@ def _portfolio_return(
     for symbol, weight in weights.items():
         prior = history.closes[symbol][index]
         current = history.closes[symbol][index + 1]
+        if prior is None or current is None:
+            raise ValueError(
+                f"Missing price history for {symbol} around {history.dates[index].isoformat()}."
+            )
         total += weight * ((current / prior) - 1.0)
     return total
 
