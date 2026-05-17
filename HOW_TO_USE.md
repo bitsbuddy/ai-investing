@@ -56,11 +56,25 @@ PYTHONPATH=src python3 -m ai_investing.cli paper-setup --research-snapshot examp
 PYTHONPATH=src python3 -m ai_investing.cli paper-setup --sec-user-agent "AI-Investing your-email@example.com"
 ```
 
+If HTTPS certificate verification fails on your machine:
+
+```env
+AI_INVESTING_CA_BUNDLE=/path/to/cacert.pem
+```
+
+Only for local paper-testing as a last resort:
+
+```env
+AI_INVESTING_SSL_NO_VERIFY=1
+```
+
 ## 3. Main Ways To Use It
 
-There are 5 main commands:
+There are 7 main commands:
 
 - `paper-setup`: create a safe paper-trading env file
+- `automation-setup`: generate a weekday runner script and cron template
+- `automation-ui`: open a local start/stop control panel for automation
 - `backtest`: test the strategy on history
 - `research`: score assets using the research snapshot
 - `signal`: generate the current target portfolio
@@ -159,7 +173,68 @@ The system will:
 - keep pending orders open until they are reconciled
 - ingest latest official macro and filing news unless you explicitly disable it
 
-## 9. Move To Live Trading
+## 9. Automate The Daily Run
+
+Generate a weekday runner script and cron template:
+
+```bash
+PYTHONPATH=src python3 -m ai_investing.cli automation-setup
+```
+
+This writes:
+
+- `scripts/run_paper_trade.sh`
+- `automation/paper_trade.cron`
+
+By default it schedules a weekday run at `09:40` in your machine's local timezone and submits paper orders automatically.
+
+Install the cron schedule:
+
+```bash
+crontab automation/paper_trade.cron
+crontab -l
+```
+
+Watch the automation log:
+
+```bash
+tail -f logs/paper-trade.log
+```
+
+If you want to test the automation without sending orders first:
+
+```bash
+PYTHONPATH=src python3 -m ai_investing.cli automation-setup --preview-only --force
+```
+
+## 10. Start And Stop Automation From A UI
+
+Run the local control panel:
+
+```bash
+PYTHONPATH=src python3 -m ai_investing.cli automation-ui
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8787
+```
+
+The UI gives you:
+
+- a simple enabled / disabled status
+- a `Start Automation` button
+- a `Stop Automation` button
+- a `Run Now` button to trigger the runner immediately
+- a high-level progress summary of the last run
+- the current runner phase and result
+- the recent automation log output
+- the key file paths and cron schedule being used by the scheduler
+
+The scheduled runner checks the control file before each run, so stopping automation in the UI prevents the next scheduled trade from executing.
+
+## 11. Move To Live Trading
 
 Only do this after paper trading for a while.
 
@@ -176,7 +251,7 @@ Then submit:
 PYTHONPATH=src python3 -m ai_investing.cli trade --submit
 ```
 
-## 10. Typical Daily Workflow
+## 12. Typical Daily Workflow
 
 Use this order:
 
@@ -188,7 +263,7 @@ Use this order:
 6. Review the output.
 7. If it looks correct, run `trade --submit`.
 
-## 11. Optional: Broaden The Universe
+## 13. Optional: Broaden The Universe
 
 Default risk-on universe:
 
@@ -204,16 +279,18 @@ AI_INVESTING_RISK_ON=SPY,QQQ,MSFT,NVDA,AMZN
 
 If you add equities, put company metrics for them in the research snapshot.
 
-## 12. Important Safety Notes
+## 14. Important Safety Notes
 
 - Start with paper trading.
 - Start with small size.
 - Do not assume backtest results will match live performance.
+- Automation should stay on paper until you have reviewed logs and fills for a while.
+- The UI only enables or disables scheduled runs. It does not replace the scheduler itself.
 - Research snapshots must be current. Future-dated or stale snapshots are rejected.
 - Official news is live-only context. It is not included in backtests, by design.
 - This system is designed for low-frequency rebalancing, not intraday trading or HFT.
 
-## 13. Useful Commands
+## 15. Useful Commands
 
 Show CLI help:
 
@@ -227,7 +304,19 @@ Show research help:
 PYTHONPATH=src python3 -m ai_investing.cli research --help
 ```
 
-## 14. Recommended Starting Point
+Show automation help:
+
+```bash
+PYTHONPATH=src python3 -m ai_investing.cli automation-setup --help
+```
+
+Show automation UI help:
+
+```bash
+PYTHONPATH=src python3 -m ai_investing.cli automation-ui --help
+```
+
+## 16. Recommended Starting Point
 
 If you want the shortest path:
 

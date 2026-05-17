@@ -1,4 +1,10 @@
+.env.local
+.env.paper
 .ai_investing_state.json
 __pycache__/
 *.pyc
 logs/
+automation/*.cron
+automation/*.enabled
+automation/*.status
+scripts/run_paper_trade.sh

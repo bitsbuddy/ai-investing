@@ -7,6 +7,7 @@ from urllib import error, parse, request
 
 from .config import BrokerConfig
 from .models import AccountSnapshot, ClockSnapshot, Position
+from .tls import build_ssl_context, tls_help_message
 
 
 class AlpacaClient:
@@ -51,7 +52,7 @@ class AlpacaClient:
         )
 
         try:
-            with request.urlopen(req, timeout=30) as response:
+            with request.urlopen(req, timeout=30, context=build_ssl_context()) as response:
                 payload = response.read().decode("utf-8")
                 return json.loads(payload) if payload else None
         except error.HTTPError as exc:
@@ -60,6 +61,11 @@ class AlpacaClient:
             detail = exc.read().decode("utf-8")
             raise RuntimeError(
                 f"Alpaca API request failed ({exc.code}) {method} {path}: {detail}"
+            ) from exc
+        except error.URLError as exc:
+            raise RuntimeError(
+                "Unable to establish a trusted HTTPS connection to Alpaca. "
+                f"{tls_help_message()} Original error: {exc}"
             ) from exc
 
     def get_account(self) -> AccountSnapshot:

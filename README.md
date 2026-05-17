@@ -146,6 +146,39 @@ PYTHONPATH=src python3 -m ai_investing.cli trade --research-snapshot examples/re
 PYTHONPATH=src python3 -m ai_investing.cli trade --submit --research-snapshot examples/research_snapshot.example.json
 ```
 
+### One-Command Automation Setup
+
+If you want unattended paper trading, generate a runner script and cron template:
+
+```bash
+PYTHONPATH=src python3 -m ai_investing.cli automation-setup
+```
+
+This writes:
+
+- `scripts/run_paper_trade.sh`
+- `automation/paper_trade.cron`
+
+Then install the cron schedule:
+
+```bash
+crontab automation/paper_trade.cron
+```
+
+The default schedule is weekdays at `09:40` in the machine's local timezone, and the log file is `logs/paper-trade.log`.
+
+### Simple UI For Start / Stop
+
+If you want a small local control panel, run:
+
+```bash
+PYTHONPATH=src python3 -m ai_investing.cli automation-ui
+```
+
+Then open `http://127.0.0.1:8787`.
+
+The UI toggles the automation control file used by the scheduled runner, lets you force an immediate manual run, and shows high-level progress for the latest run, current runner state, and recent log output so you can see what the automation is doing without tailing files manually.
+
 ### Backtest
 
 ```bash
@@ -186,6 +219,8 @@ Before submission, the system checks that:
 
 The live-oriented commands also print an `Official News Context` section so you can see which reliable sources were ingested and what macro bucket scores they produced.
 
+If you hit local TLS certificate issues on macOS or another custom Python install, you can point the system at a CA bundle with `AI_INVESTING_CA_BUNDLE=/path/to/cacert.pem`. As a last resort for local paper testing only, you can set `AI_INVESTING_SSL_NO_VERIFY=1`, but that should not be your steady-state configuration.
+
 ### Enable Live Trading
 
 Live trading requires both:
@@ -213,6 +248,8 @@ Example cron schedule for weekday runs at 9:40am New York time:
 ```cron
 40 9 * * 1-5 cd /path/to/AI-Investing && PYTHONPATH=src /usr/local/bin/python3 -m ai_investing.cli trade --submit >> logs/trade.log 2>&1
 ```
+
+You can now generate a repo-local version of that schedule automatically with `automation-setup`.
 
 ## Limitations
 

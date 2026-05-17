@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
+from .automation import serve_automation_ui, write_automation_enabled
 from .alpaca import AlpacaClient
 from .backtest import (
     run_backtest,
@@ -35,6 +37,57 @@ def build_parser() -> argparse.ArgumentParser:
     paper_setup.add_argument("--research-snapshot", default=None)
     paper_setup.add_argument("--sec-user-agent", default=None)
     paper_setup.add_argument("--force", action="store_true")
+
+    automation_setup = subparsers.add_parser(
+        "automation-setup",
+        help="Generate a daily runner script and cron template for unattended trading.",
+    )
+    automation_setup.add_argument("--env-file", default=".env.paper")
+    automation_setup.add_argument("--script-file", default="scripts/run_paper_trade.sh")
+    automation_setup.add_argument("--cron-file", default="automation/paper_trade.cron")
+    automation_setup.add_argument("--status-file", default="automation/paper_trade.status")
+    automation_setup.add_argument("--hour", type=int, default=9)
+    automation_setup.add_argument("--minute", type=int, default=40)
+    automation_setup.add_argument("--preview-only", action="store_true")
+    automation_setup.add_argument("--force", action="store_true")
+
+    automation_ui = subparsers.add_parser(
+        "automation-ui",
+        help="Run a local web UI to start and stop the scheduled automation.",
+    )
+    automation_ui.add_argument("--host", default="127.0.0.1")
+    automation_ui.add_argument("--port", type=int, default=8787)
+    automation_ui.add_argument("--env-file", default=".env.paper")
+    automation_ui.add_argument(
+        "--script-file", default="scripts/run_paper_trade.sh"
+    )
+    automation_ui.add_argument(
+        "--control-file", default="automation/paper_trade.enabled"
+    )
+    automation_ui.add_argument(
+        "--cron-file", default="automation/paper_trade.cron"
+    )
+    automation_ui.add_argument(
+        "--log-file", default="logs/paper-trade.log"
+    )
+    automation_ui.add_argument(
+        "--status-file", default="automation/paper_trade.status"
+    )
+
+    automation_run = subparsers.add_parser(
+        "automation-run",
+        help="Execute the scheduled automation flow with market-hours aware behavior.",
+    )
+    automation_run.add_argument("--lookback-days", type=int, default=900)
+    automation_run.add_argument("--feed", default=None)
+    automation_run.add_argument("--research-snapshot", default=None)
+    automation_run.add_argument("--training-window-bars", type=int, default=756)
+    automation_run.add_argument("--force", action="store_true")
+    automation_run.add_argument("--no-official-news", action="store_true")
+    automation_run.add_argument("--official-news-lookback-days", type=int, default=None)
+    automation_run.add_argument("--require-official-news", action="store_true")
+    automation_run.add_argument("--manual", action="store_true")
+    automation_run.add_argument("--preview-only", action="store_true")
 
     backtest = subparsers.add_parser("backtest", help="Run a historical backtest.")
     backtest.add_argument("--start", type=_parse_date, required=True)
@@ -85,6 +138,12 @@ def main() -> None:
     if args.command == "paper-setup":
         _run_paper_setup_command(broker_config, runtime_config, args)
         return
+    if args.command == "automation-setup":
+        _run_automation_setup_command(runtime_config, args)
+        return
+    if args.command == "automation-ui":
+        _run_automation_ui_command(args)
+        return
 
     if args.command == "research":
         research_snapshot_path = _resolve_research_snapshot_path(runtime_config, args)
@@ -108,6 +167,9 @@ def main() -> None:
         return
     if args.command == "trade":
         _run_trade_command(client, broker_config.paper, runtime_config, args)
+        return
+    if args.command == "automation-run":
+        _run_automation_trade_command(client, broker_config.paper, runtime_config, args)
         return
     raise ValueError(f"Unsupported command: {args.command}")
 
@@ -223,6 +285,104 @@ def _run_paper_setup_command(
         )
 
 
+def _run_automation_setup_command(
+    runtime_config,
+    args: argparse.Namespace,
+) -> None:
+    repo_root = Path.cwd().resolve()
+    env_path = Path(args.env_file).resolve()
+    script_path = Path(args.script_file).resolve()
+    cron_path = Path(args.cron_file).resolve()
+    control_path = Path("automation/paper_trade.enabled").resolve()
+    status_path = Path(args.status_file).resolve()
+
+    if not env_path.exists():
+        raise FileNotFoundError(
+            f"{env_path} does not exist. Create it first with `paper-setup` or manually."
+        )
+    if not (0 <= args.hour <= 23):
+        raise ValueError("--hour must be between 0 and 23.")
+    if not (0 <= args.minute <= 59):
+        raise ValueError("--minute must be between 0 and 59.")
+    for path in (script_path, cron_path):
+        if path.exists() and not args.force:
+            raise FileExistsError(
+                f"{path} already exists. Re-run with --force to overwrite it."
+            )
+
+    script_path.parent.mkdir(parents=True, exist_ok=True)
+    cron_path.parent.mkdir(parents=True, exist_ok=True)
+    control_path.parent.mkdir(parents=True, exist_ok=True)
+    status_path.parent.mkdir(parents=True, exist_ok=True)
+    write_automation_enabled(control_path, True)
+    status_path.write_text(
+        "run_phase=idle\nlast_result=never\nlast_message=Waiting for first scheduled run\n"
+    )
+
+    script_path.write_text(
+        _render_automation_script(
+            repo_root=repo_root,
+            env_path=env_path,
+            python_path=Path(sys.executable).resolve(),
+            control_path=control_path,
+            status_path=status_path,
+            preview_only=args.preview_only,
+        )
+    )
+    script_path.chmod(0o755)
+    cron_path.write_text(
+        _render_cron_file(
+            script_path=script_path,
+            hour=args.hour,
+            minute=args.minute,
+        )
+    )
+
+    mode = "preview-only dry run" if args.preview_only else "paper order submission"
+    print(f"Wrote automation script: {script_path}")
+    print(f"Wrote cron template: {cron_path}")
+    print("")
+    print("Automation Settings")
+    print(f"- mode: {mode}")
+    print(f"- env file: {env_path}")
+    print(f"- control file: {control_path}")
+    print(f"- status file: {status_path}")
+    print(f"- schedule: weekdays at {args.hour:02d}:{args.minute:02d} (system local time)")
+    print("- log file: logs/paper-trade.log")
+    print("")
+    print("Next Steps")
+    print(f"- crontab {cron_path}")
+    print("- crontab -l")
+    print("- tail -f logs/paper-trade.log")
+    print("- PYTHONPATH=src python3 -m ai_investing.cli automation-ui")
+
+
+def _run_automation_ui_command(args: argparse.Namespace) -> None:
+    host = args.host
+    port = args.port
+    env_path = Path(args.env_file).resolve()
+    script_path = Path(args.script_file).resolve()
+    control_path = Path(args.control_file).resolve()
+    cron_path = Path(args.cron_file).resolve()
+    log_path = Path(args.log_file).resolve()
+    status_path = Path(args.status_file).resolve()
+    if not (0 <= port <= 65535):
+        raise ValueError("--port must be between 0 and 65535.")
+
+    print(f"Automation UI: http://{host}:{port}")
+    print("Press Ctrl+C to stop the UI server.")
+    serve_automation_ui(
+        host=host,
+        port=port,
+        control_path=control_path,
+        script_path=script_path,
+        env_path=env_path,
+        cron_path=cron_path,
+        log_path=log_path,
+        state_path=status_path,
+    )
+
+
 def _run_signal_command(
     client: AlpacaClient, runtime_config, args: argparse.Namespace
 ) -> None:
@@ -300,6 +460,47 @@ def _run_trade_command(
         print("")
         print(f"Submitted {len(responses)} orders.")
         print(f"High-water mark: ${state.high_water_mark:.2f}")
+
+
+def _run_automation_trade_command(
+    client: AlpacaClient,
+    is_paper: bool,
+    runtime_config,
+    args: argparse.Namespace,
+) -> None:
+    if args.preview_only:
+        print("Automation mode: preview-only dry run.")
+        _run_trade_command(
+            client,
+            is_paper,
+            runtime_config,
+            _copy_namespace_with_submit(args, submit=False),
+        )
+        return
+
+    clock = client.get_clock()
+    if clock.is_open:
+        _run_trade_command(
+            client,
+            is_paper,
+            runtime_config,
+            _copy_namespace_with_submit(args, submit=True),
+        )
+        return
+
+    if args.manual:
+        print(
+            f"Market is closed at {clock.timestamp}. Running a preview instead of submitting orders."
+        )
+        _run_trade_command(
+            client,
+            is_paper,
+            runtime_config,
+            _copy_namespace_with_submit(args, submit=False),
+        )
+        return
+
+    print(f"Market is closed at {clock.timestamp}. Skipping scheduled run.")
 
 
 def _run_research_command(
@@ -400,7 +601,7 @@ def _compute_latest_signal(
     research_overlay = _build_research_overlay(snapshot, official_news)
     if snapshot is not None and research_overlay is not None:
         research_overlay.validate_for_date(
-            history.dates[signal_index],
+            _resolve_research_validation_date(history.dates[signal_index]),
             max_age_days=runtime_config.research_max_age_days,
         )
     best_result = select_walk_forward_parameters(
@@ -657,3 +858,94 @@ def _resolve_paper_setup_sec_user_agent(
     if raw_value:
         return raw_value
     return runtime_config.sec_user_agent
+
+
+def _resolve_research_validation_date(signal_date: date) -> date:
+    return max(signal_date, _today_utc())
+
+
+def _copy_namespace_with_submit(
+    args: argparse.Namespace,
+    *,
+    submit: bool,
+) -> argparse.Namespace:
+    values = vars(args).copy()
+    values["submit"] = submit
+    return argparse.Namespace(**values)
+
+
+def _render_automation_script(
+    *,
+    repo_root: Path,
+    env_path: Path,
+    python_path: Path,
+    control_path: Path,
+    status_path: Path,
+    preview_only: bool,
+) -> str:
+    preview_only_line = 'automation_args+=("--preview-only")\n' if preview_only else ""
+    return f"""#!/bin/zsh
+set -euo pipefail
+
+status_file="{status_path}"
+run_kind="scheduled"
+automation_args=("automation-run")
+{preview_only_line}if [ "${{AI_INVESTING_FORCE_RUN:-0}}" = "1" ]; then
+  automation_args+=("--manual")
+fi
+if [ "${{AI_INVESTING_FORCE_RUN:-0}}" = "1" ]; then
+  run_kind="manual"
+fi
+
+write_status() {{
+  cat > "$status_file" <<EOF
+run_phase=$1
+last_result=$2
+last_message=$3
+last_started_at=$4
+last_finished_at=$5
+last_exit_code=$6
+EOF
+}}
+
+run_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+trap 'code=$?; run_finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"; write_status failed failed "$run_kind run failed" "$run_started_at" "$run_finished_at" "$code"; echo "=== $(date -u +%Y-%m-%dT%H:%M:%SZ) $run_kind run failed (exit $code) ==="; exit $code' ERR
+
+cd "{repo_root}"
+mkdir -p "{repo_root / 'logs'}"
+exec >> "{repo_root / 'logs' / 'paper-trade.log'}" 2>&1
+
+echo "=== $(date -u +%Y-%m-%dT%H:%M:%SZ) $run_kind run start ==="
+write_status running pending "$run_kind run starting" "$run_started_at" "" ""
+if [ "${{AI_INVESTING_FORCE_RUN:-0}}" != "1" ] && ( [ ! -f "{control_path}" ] || ! grep -q '^enabled=1$' "{control_path}" ); then
+  run_finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  write_status idle skipped "Automation disabled; skipped scheduled run" "$run_started_at" "$run_finished_at" "0"
+  echo "=== $(date -u +%Y-%m-%dT%H:%M:%SZ) automation disabled; skipping run ==="
+  exit 0
+fi
+set -a
+source "{env_path}"
+set +a
+PYTHONPATH=src "{python_path}" -m ai_investing.cli "${{automation_args[@]}}"
+run_finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+write_status idle success "$run_kind run completed successfully" "$run_started_at" "$run_finished_at" "0"
+echo "=== $(date -u +%Y-%m-%dT%H:%M:%SZ) $run_kind run end ==="
+"""
+
+
+def _render_cron_file(
+    *,
+    script_path: Path,
+    hour: int,
+    minute: int,
+) -> str:
+    return (
+        "# Load this schedule with: crontab automation/paper_trade.cron\n"
+        "# Weekdays only. Time uses the machine's local timezone.\n"
+        f"{minute} {hour} * * 1-5 /bin/zsh \"{script_path}\"\n"
+    )
+
+
+if __name__ == "__main__":
+    main()

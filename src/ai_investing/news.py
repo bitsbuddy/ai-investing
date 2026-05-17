@@ -13,6 +13,7 @@ from urllib.request import Request, urlopen
 from xml.etree import ElementTree
 
 from .models import OfficialNewsContext, OfficialNewsItem, ResearchAsset
+from .tls import build_ssl_context, tls_help_message
 
 _FED_PRESS_FEED_URL = "https://www.federalreserve.gov/feeds/press_all.xml"
 _BLS_HOME_URL = "https://www.bls.gov/home.htm"
@@ -205,11 +206,13 @@ def _fetch_text(url: str, *, user_agent: str, timeout_seconds: int = 15) -> str:
     headers = {"User-Agent": user_agent, "Accept-Encoding": "identity"}
     request = Request(url, headers=headers)
     try:
-        with urlopen(request, timeout=timeout_seconds) as response:
+        with urlopen(request, timeout=timeout_seconds, context=build_ssl_context()) as response:
             charset = response.headers.get_content_charset() or "utf-8"
             return response.read().decode(charset, errors="replace")
     except (HTTPError, URLError, TimeoutError) as exc:
-        raise RuntimeError(f"unable to fetch {url}: {exc}") from exc
+        raise RuntimeError(
+            f"unable to fetch {url}: {exc}. {tls_help_message()}"
+        ) from exc
 
 
 def _parse_fed_press_feed(
