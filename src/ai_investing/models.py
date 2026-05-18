@@ -7,12 +7,18 @@ from datetime import date
 @dataclass(frozen=True)
 class StrategyParameters:
     top_n: int = 3
+    equity_count: int = 4
     defensive_count: int = 2
+    min_risk_on_positions: int = 3
     trend_window: int = 200
     volatility_window: int = 20
     rebalance_frequency: str = "weekly"
     cash_buffer: float = 0.05
+    target_equity_allocation: float = 0.45
     max_position_weight: float = 0.5
+    max_equity_position_weight: float = 0.12
+    max_sector_weight: float = 0.30
+    max_benchmark_weight: float = 0.55
     momentum_windows: tuple[int, int, int] = (21, 63, 126)
     momentum_weights: tuple[float, float, float] = (0.5, 0.3, 0.2)
 
@@ -68,6 +74,7 @@ class ResearchAsset:
     symbol: str
     asset_type: str
     benchmark_index: str | None = None
+    sector: str | None = None
     company: CompanyMetrics | None = None
     etf: ETFMetrics | None = None
     index: IndexMetrics | None = None
@@ -114,6 +121,7 @@ class ResearchAssessment:
     component_scores: dict[str, float] = field(default_factory=dict)
     asset_type: str | None = None
     benchmark_index: str | None = None
+    sector: str | None = None
     notes: tuple[str, ...] = ()
 
 

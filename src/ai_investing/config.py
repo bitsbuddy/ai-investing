@@ -70,6 +70,7 @@ class RuntimeConfig:
     performance_baseline: float | None
     default_feed: str
     risk_on_universe: tuple[str, ...]
+    equity_universe: tuple[str, ...]
     defensive_universe: tuple[str, ...]
     research_snapshot_path: Path | None
     research_max_age_days: int
@@ -131,6 +132,24 @@ def load_runtime_config(env: Mapping[str, str] | None = None) -> RuntimeConfig:
             _csv_env(
                 "AI_INVESTING_RISK_ON",
                 ["SPY", "QQQ", "IWM", "EFA", "EEM"],
+                env,
+            )
+        ),
+        equity_universe=tuple(
+            _csv_env(
+                "AI_INVESTING_EQUITIES",
+                [
+                    "MSFT",
+                    "NVDA",
+                    "AMZN",
+                    "GOOGL",
+                    "META",
+                    "JPM",
+                    "LLY",
+                    "XOM",
+                    "COST",
+                    "AVGO",
+                ],
                 env,
             )
         ),

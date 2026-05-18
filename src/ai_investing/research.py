@@ -29,6 +29,7 @@ def load_research_snapshot(path: Path) -> ResearchSnapshot:
             symbol=symbol.upper(),
             asset_type=str(asset_payload.get("asset_type", "unknown")).lower(),
             benchmark_index=_maybe_upper(asset_payload.get("benchmark_index")),
+            sector=_maybe_text(asset_payload.get("sector")),
             company=CompanyMetrics(**company_payload) if company_payload else None,
             etf=ETFMetrics(**etf_payload) if etf_payload else None,
             index=IndexMetrics(**index_payload) if index_payload else None,
@@ -114,6 +115,7 @@ class ResearchOverlay:
             component_scores=components,
             asset_type=asset_type,
             benchmark_index=benchmark_index,
+            sector=asset.sector if asset is not None else None,
             notes=tuple(notes),
         )
 
@@ -271,3 +273,10 @@ def _maybe_upper(value: str | None) -> str | None:
     if value is None:
         return None
     return value.upper()
+
+
+def _maybe_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None

@@ -38,6 +38,7 @@ ALPACA_SECRET_KEY=your_secret
 ALPACA_PAPER=true
 AI_INVESTING_ENABLE_LIVE=0
 AI_INVESTING_RISK_PROFILE=balanced
+AI_INVESTING_EQUITIES=MSFT,NVDA,AMZN,GOOGL,META,JPM,LLY,XOM,COST,AVGO
 ```
 
 If you want the research overlay, also set:
@@ -103,6 +104,12 @@ There are 10 main commands:
 
 `research`, `signal`, and `trade` now also pull latest official-source news by default from the SEC, Federal Reserve, BLS, and Treasury.
 
+By default, the live risk-on book is now a mix of:
+
+- broad / style ETFs from `AI_INVESTING_RISK_ON`
+- single-stock ideas from `AI_INVESTING_EQUITIES`
+- defensive ETFs from `AI_INVESTING_DEFENSIVE`
+
 If LLM news is enabled, those commands additionally classify official-source documents with a structured model output. If the model call fails and `AI_INVESTING_REQUIRE_LLM_NEWS=0`, the system falls back to the rule-based news scorer.
 
 ## 4. Backtest It
@@ -161,7 +168,7 @@ PYTHONPATH=src python3 -m ai_investing.cli signal --research-snapshot examples/r
 This prints:
 
 - regime (`risk_on` or `risk_off`)
-- target weights
+- target weights across ETFs and any selected stocks
 - official-source news context
 - optional LLM-generated news summaries when enabled
 - selected research scores when the overlay is enabled

@@ -106,6 +106,25 @@ class AlpacaClient:
             timestamp=str(payload["timestamp"]),
         )
 
+    def cancel_all_orders(self) -> list[dict[str, Any]]:
+        payload = self._request(
+            base_url=self._config.trading_base_url,
+            method="DELETE",
+            path="/v2/orders",
+        )
+        return list(payload or [])
+
+    def close_all_positions(
+        self, *, cancel_orders: bool = True
+    ) -> list[dict[str, Any]]:
+        payload = self._request(
+            base_url=self._config.trading_base_url,
+            method="DELETE",
+            path="/v2/positions",
+            query={"cancel_orders": str(cancel_orders).lower()},
+        )
+        return list(payload or [])
+
     def submit_market_order(
         self,
         *,

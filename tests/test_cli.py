@@ -13,8 +13,10 @@ from ai_investing.cli import (
     _resolve_research_validation_date,
     _run_automation_setup_command,
     _run_automation_trade_command,
+    _run_multi_profile_run_command,
     _run_multi_profile_setup_command,
     _run_paper_setup_command,
+    _run_reset_account_command,
 )
 from ai_investing.config import BrokerConfig, RuntimeConfig
 from ai_investing.models import ClockSnapshot
@@ -30,6 +32,37 @@ class _FakeClockClient:
         return self._clock
 
 
+class _FakeAccount:
+    def __init__(self, equity: float) -> None:
+        self.equity = equity
+
+
+class _FakeAlpacaClient:
+    def __init__(self, _broker_config: BrokerConfig) -> None:
+        self.account = _FakeAccount(101000.0)
+
+    def get_account(self) -> _FakeAccount:
+        return self.account
+
+
+class _FakeResetClient:
+    def __init__(self, positions=None) -> None:
+        self._positions = list(positions or [])
+        self.cancel_calls = 0
+        self.close_calls = 0
+
+    def get_positions(self):
+        return list(self._positions)
+
+    def cancel_all_orders(self):
+        self.cancel_calls += 1
+        return [{"id": "order-1"}]
+
+    def close_all_positions(self, *, cancel_orders: bool):
+        self.close_calls += 1
+        return [{"id": "liq-1", "cancel_orders": cancel_orders}]
+
+
 def _runtime_config(**overrides) -> RuntimeConfig:
     values = {
         "profile_name": "Balanced",
@@ -41,6 +74,7 @@ def _runtime_config(**overrides) -> RuntimeConfig:
         "performance_baseline": None,
         "default_feed": "iex",
         "risk_on_universe": ("SPY",),
+        "equity_universe": ("MSFT",),
         "defensive_universe": ("TLT",),
         "research_snapshot_path": Path("examples/research_snapshot.example.json"),
         "research_max_age_days": 45,
@@ -88,6 +122,7 @@ class CLITests(unittest.TestCase):
             contents = env_path.read_text()
             self.assertIn("ALPACA_PAPER=true", contents)
             self.assertIn("AI_INVESTING_ENABLE_LIVE=0", contents)
+            self.assertIn("AI_INVESTING_EQUITIES=MSFT", contents)
             self.assertIn(
                 "AI_INVESTING_RESEARCH_SNAPSHOT_PATH=examples/research_snapshot.example.json",
                 contents,
@@ -135,6 +170,7 @@ class CLITests(unittest.TestCase):
                 script_file=str(script_path),
                 cron_file=str(cron_path),
                 status_file=str(status_path),
+                manifest=str(root / "profiles" / "profile_matrix.json"),
                 hour=9,
                 minute=40,
                 preview_only=False,
@@ -165,6 +201,44 @@ class CLITests(unittest.TestCase):
         self.assertIn("run_phase=idle", status_contents)
         self.assertIn("last_result=never", status_contents)
         self.assertIn("crontab", output.getvalue())
+
+    def test_automation_setup_prefers_profile_matrix_when_manifest_exists(self) -> None:
+        import os
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            env_path = root / ".env.paper"
+            env_path.write_text("ALPACA_PAPER=true\nAI_INVESTING_ENABLE_LIVE=0\n")
+            manifest_path = root / "profiles" / "profile_matrix.json"
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text('{"profiles":[{"name":"aggressive","env_file":"profiles/aggressive.paper.env"}]}\n')
+            script_path = root / "scripts" / "run_paper_trade.sh"
+            cron_path = root / "automation" / "paper_trade.cron"
+            status_path = root / "automation" / "paper_trade.status"
+            runtime_config = _runtime_config(research_snapshot_path=None)
+            args = argparse.Namespace(
+                env_file=str(env_path),
+                script_file=str(script_path),
+                cron_file=str(cron_path),
+                status_file=str(status_path),
+                manifest=str(manifest_path),
+                hour=9,
+                minute=40,
+                preview_only=False,
+                force=False,
+            )
+
+            cwd_before = Path.cwd()
+            try:
+                os.chdir(root)
+                _run_automation_setup_command(runtime_config, args)
+            finally:
+                os.chdir(cwd_before)
+
+            script_contents = script_path.read_text()
+            self.assertIn('multi-profile-run" "--manifest"', script_contents)
+            self.assertIn("--allow-failures", script_contents)
+            self.assertIn("--submit", script_contents)
 
     def test_multi_profile_setup_writes_distinct_env_files_and_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -201,6 +275,88 @@ class CLITests(unittest.TestCase):
                 conservative_text,
             )
             self.assertIn("different Alpaca paper key", output.getvalue())
+
+    def test_multi_profile_run_skips_placeholder_profiles_and_keeps_successful_ones(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            profile_dir = root / "profiles"
+            profile_dir.mkdir(parents=True, exist_ok=True)
+            manifest_path = profile_dir / "profile_matrix.json"
+            conservative_env = profile_dir / "conservative.paper.env"
+            aggressive_env = profile_dir / "aggressive.paper.env"
+            conservative_env.write_text(
+                "ALPACA_API_KEY=your-conservative-paper-key\n"
+                "ALPACA_SECRET_KEY=your-conservative-paper-secret\n"
+                "AI_INVESTING_PROFILE_NAME=Conservative\n"
+                "AI_INVESTING_RISK_PROFILE=conservative\n"
+                "AI_INVESTING_STATE_PATH=.ai_investing_conservative_state.json\n"
+            )
+            aggressive_env.write_text(
+                "ALPACA_API_KEY=real-aggressive-key\n"
+                "ALPACA_SECRET_KEY=real-aggressive-secret\n"
+                "AI_INVESTING_PROFILE_NAME=Aggressive\n"
+                "AI_INVESTING_RISK_PROFILE=aggressive\n"
+                "AI_INVESTING_STATE_PATH=.ai_investing_aggressive_state.json\n"
+                "AI_INVESTING_PERFORMANCE_BASELINE=100000\n"
+            )
+            manifest_path.write_text(
+                "{\n"
+                '  "profiles": [\n'
+                f'    {{"name": "conservative", "env_file": "{conservative_env}"}},\n'
+                f'    {{"name": "aggressive", "env_file": "{aggressive_env}"}}\n'
+                "  ]\n"
+                "}\n"
+            )
+            args = argparse.Namespace(
+                manifest=str(manifest_path),
+                lookback_days=900,
+                feed=None,
+                training_window_bars=756,
+                submit=True,
+                force=False,
+                no_official_news=False,
+                no_llm_news=False,
+                official_news_lookback_days=None,
+                require_official_news=False,
+                require_llm_news=False,
+                manual=False,
+                preview_only=False,
+                allow_failures=True,
+            )
+
+            output = io.StringIO()
+            with patch("ai_investing.cli.AlpacaClient", _FakeAlpacaClient):
+                with patch("ai_investing.cli._run_automation_trade_command") as run_trade:
+                    with redirect_stdout(output):
+                        _run_multi_profile_run_command(args)
+
+            rendered = output.getvalue()
+            self.assertIn("Profile skipped: missing or placeholder Alpaca credentials.", rendered)
+            self.assertIn("Aggressive", rendered)
+            self.assertIn("1 succeeded | 1 skipped | 0 failed", rendered)
+
+    def test_reset_account_clears_state_and_liquidates_positions(self) -> None:
+        from ai_investing.models import Position
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_path = Path(tmpdir) / ".ai_investing_aggressive_state.json"
+            state_path.write_text('{"high_water_mark": 100000, "last_rebalance_date": "2026-05-15"}\n')
+            runtime_config = _runtime_config(state_path=state_path, profile_name="Aggressive")
+            client = _FakeResetClient(
+                positions=[Position(symbol="SPY", qty=10.0, market_value=5000.0)]
+            )
+            args = argparse.Namespace(keep_state=False, allow_live=False)
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                _run_reset_account_command(client, True, runtime_config, args)
+
+            self.assertEqual(client.cancel_calls, 1)
+            self.assertEqual(client.close_calls, 1)
+            self.assertIn('"high_water_mark": 0.0', state_path.read_text())
+            rendered = output.getvalue()
+            self.assertIn("Canceled open orders: 1", rendered)
+            self.assertIn("Submitted liquidation orders: 1", rendered)
 
     def test_automation_trade_manual_run_falls_back_to_preview_when_market_is_closed(self) -> None:
         runtime_config = _runtime_config()

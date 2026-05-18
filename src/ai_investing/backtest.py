@@ -82,9 +82,11 @@ def optimize_strategy(
     risk_on_universe: tuple[str, ...],
     defensive_universe: tuple[str, ...],
     base_params: StrategyParameters,
+    equity_universe: tuple[str, ...] = (),
 ) -> BacktestResult:
     seed_strategy = ETFMomentumStrategy(
         risk_on_universe=risk_on_universe,
+        equity_universe=equity_universe,
         defensive_universe=defensive_universe,
         params=base_params,
     )
@@ -92,6 +94,7 @@ def optimize_strategy(
     for params in seed_strategy.parameter_grid():
         strategy = ETFMomentumStrategy(
             risk_on_universe=risk_on_universe,
+            equity_universe=equity_universe,
             defensive_universe=defensive_universe,
             params=params,
         )
@@ -107,6 +110,7 @@ def select_walk_forward_parameters(
     base_params: StrategyParameters,
     signal_index: int,
     training_window: int = 756,
+    equity_universe: tuple[str, ...] = (),
 ) -> BacktestResult:
     if signal_index < 2:
         raise ValueError("Need more history before selecting parameters.")
@@ -117,6 +121,7 @@ def select_walk_forward_parameters(
     return optimize_strategy(
         training_history,
         risk_on_universe=risk_on_universe,
+        equity_universe=equity_universe,
         defensive_universe=defensive_universe,
         base_params=base_params,
     )
@@ -131,9 +136,11 @@ def run_walk_forward_backtest(
     training_window: int = 756,
     parameter_reselection_frequency: str = "monthly",
     transaction_cost_bps: float = 5.0,
+    equity_universe: tuple[str, ...] = (),
 ) -> BacktestResult:
     seed_strategy = ETFMomentumStrategy(
         risk_on_universe=risk_on_universe,
+        equity_universe=equity_universe,
         defensive_universe=defensive_universe,
         params=base_params,
     )
@@ -141,6 +148,7 @@ def run_walk_forward_backtest(
     max_warmup = max(
         ETFMomentumStrategy(
             risk_on_universe=risk_on_universe,
+            equity_universe=equity_universe,
             defensive_universe=defensive_universe,
             params=params,
         ).warmup_bars
@@ -172,6 +180,7 @@ def run_walk_forward_backtest(
             best_result = select_walk_forward_parameters(
                 history,
                 risk_on_universe=risk_on_universe,
+                equity_universe=equity_universe,
                 defensive_universe=defensive_universe,
                 base_params=base_params,
                 signal_index=index,
@@ -179,6 +188,7 @@ def run_walk_forward_backtest(
             )
             next_strategy = ETFMomentumStrategy(
                 risk_on_universe=risk_on_universe,
+                equity_universe=equity_universe,
                 defensive_universe=defensive_universe,
                 params=best_result.params,
             )

@@ -16,7 +16,7 @@ IBKR remains a stronger choice if you need broader global market access or more 
 ## What This System Does
 
 - Fetches daily historical data from Alpaca Market Data.
-- Runs an ETF momentum and trend-following strategy with a defensive regime.
+- Runs a multi-sleeve momentum and trend-following strategy across ETFs and equities with a defensive regime.
 - Uses walk-forward parameter selection instead of full-sample parameter fitting.
 - Optionally overlays company, index, ETF, and official-source news context onto the signal engine.
 - Generates target portfolio weights for the current session.
@@ -34,18 +34,21 @@ IBKR remains a stronger choice if you need broader global market access or more 
 
 ## Strategy
 
-The default strategy still starts from liquid US ETFs:
+The default strategy now starts from three liquid sleeves:
 
-- Risk-on universe: `SPY, QQQ, IWM, EFA, EEM`
-- Defensive universe: `TLT, IEF, GLD, SHY`
+- Risk-on ETFs: `SPY, QQQ, IWM, EFA, EEM`
+- Equity sleeve: `MSFT, NVDA, AMZN, GOOGL, META, JPM, LLY, XOM, COST, AVGO`
+- Defensive ETFs: `TLT, IEF, GLD, SHY`
 
 Base quant logic:
 
-1. Compute weighted momentum over 1, 3, and 6 months.
-2. Require assets to be above a long-term moving average before they are eligible for risk-on allocation.
-3. Use inverse-volatility sizing for selected assets.
-4. Fall back to defensive ETFs when the risk-on set is weak.
-5. Keep a cash buffer and cap single-name exposure.
+1. Compute weighted momentum over multiple lookback windows.
+2. Require ETFs and equities to be above a long-term moving average before they are eligible for risk-on allocation.
+3. Select separate ETF and equity sleeves instead of a single top-`N` list.
+4. Blend quant, index, ETF, company, and official-news scores before ranking candidates.
+5. Apply diversification constraints such as sector-aware equity selection and per-position caps.
+6. Fall back to defensive ETFs when the risk-on opportunity set is too narrow.
+7. Keep a cash buffer and explicit exposure caps rather than fully concentrating in a few names.
 
 This remains deliberately simple on the execution side. Alpaca's own automated-trading disclosures warn against over-optimization and explicitly note that its platform is not intended for high-frequency trading.
 
@@ -158,13 +161,19 @@ What it does:
 
 If the LLM call fails and `AI_INVESTING_REQUIRE_LLM_NEWS=0`, the system falls back to the rule-based official-news layer.
 
-You can also broaden the universe beyond ETFs. For example:
+The equity sleeve is configurable through `AI_INVESTING_EQUITIES`. For example:
 
 ```bash
-export AI_INVESTING_RISK_ON=SPY,QQQ,MSFT,NVDA,AMZN
+export AI_INVESTING_EQUITIES=MSFT,NVDA,AMZN,GOOGL,META,JPM
 ```
 
-If you do that, provide company metrics for those equities in the research snapshot.
+You can still change the ETF sleeves independently:
+
+```bash
+export AI_INVESTING_RISK_ON=SPY,QQQ,IWM,XLF,SMH
+```
+
+If you broaden or replace the equity sleeve, provide company metrics and sectors for those names in the research snapshot.
 
 ## Quick Start
 

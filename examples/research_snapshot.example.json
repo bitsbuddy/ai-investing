@@ -137,6 +137,7 @@
     "MSFT": {
       "asset_type": "equity",
       "benchmark_index": "NDX",
+      "sector": "Software",
       "company": {
         "revenue_growth": 0.14,
         "earnings_growth": 0.16,
@@ -148,6 +149,159 @@
         "interest_coverage": 18.0,
         "pe_ratio": 31.0,
         "ev_to_ebitda": 22.0
+      }
+    },
+    "NVDA": {
+      "asset_type": "equity",
+      "benchmark_index": "NDX",
+      "sector": "Semiconductors",
+      "company": {
+        "revenue_growth": 0.32,
+        "earnings_growth": 0.38,
+        "gross_margin": 0.74,
+        "free_cash_flow_margin": 0.43,
+        "return_on_equity": 0.58,
+        "debt_to_equity": 0.27,
+        "net_debt_to_ebitda": 0.10,
+        "interest_coverage": 28.0,
+        "pe_ratio": 36.0,
+        "ev_to_ebitda": 24.0
+      }
+    },
+    "AMZN": {
+      "asset_type": "equity",
+      "benchmark_index": "NDX",
+      "sector": "Consumer Discretionary",
+      "company": {
+        "revenue_growth": 0.12,
+        "earnings_growth": 0.19,
+        "gross_margin": 0.49,
+        "free_cash_flow_margin": 0.10,
+        "return_on_equity": 0.22,
+        "debt_to_equity": 0.63,
+        "net_debt_to_ebitda": 0.80,
+        "interest_coverage": 13.0,
+        "pe_ratio": 29.0,
+        "ev_to_ebitda": 18.0
+      }
+    },
+    "GOOGL": {
+      "asset_type": "equity",
+      "benchmark_index": "NDX",
+      "sector": "Communication Services",
+      "company": {
+        "revenue_growth": 0.13,
+        "earnings_growth": 0.17,
+        "gross_margin": 0.59,
+        "free_cash_flow_margin": 0.28,
+        "return_on_equity": 0.28,
+        "debt_to_equity": 0.10,
+        "net_debt_to_ebitda": -0.40,
+        "interest_coverage": 24.0,
+        "pe_ratio": 24.0,
+        "ev_to_ebitda": 16.0
+      }
+    },
+    "META": {
+      "asset_type": "equity",
+      "benchmark_index": "NDX",
+      "sector": "Communication Services",
+      "company": {
+        "revenue_growth": 0.16,
+        "earnings_growth": 0.21,
+        "gross_margin": 0.81,
+        "free_cash_flow_margin": 0.34,
+        "return_on_equity": 0.34,
+        "debt_to_equity": 0.18,
+        "net_debt_to_ebitda": -0.20,
+        "interest_coverage": 26.0,
+        "pe_ratio": 26.0,
+        "ev_to_ebitda": 17.0
+      }
+    },
+    "JPM": {
+      "asset_type": "equity",
+      "benchmark_index": "SPX",
+      "sector": "Financials",
+      "company": {
+        "revenue_growth": 0.08,
+        "earnings_growth": 0.09,
+        "gross_margin": 0.58,
+        "free_cash_flow_margin": 0.19,
+        "return_on_equity": 0.17,
+        "debt_to_equity": 1.70,
+        "net_debt_to_ebitda": 2.20,
+        "interest_coverage": 5.5,
+        "pe_ratio": 13.0,
+        "ev_to_ebitda": 9.0
+      }
+    },
+    "LLY": {
+      "asset_type": "equity",
+      "benchmark_index": "SPX",
+      "sector": "Health Care",
+      "company": {
+        "revenue_growth": 0.18,
+        "earnings_growth": 0.24,
+        "gross_margin": 0.78,
+        "free_cash_flow_margin": 0.31,
+        "return_on_equity": 0.57,
+        "debt_to_equity": 1.40,
+        "net_debt_to_ebitda": 1.70,
+        "interest_coverage": 9.0,
+        "pe_ratio": 34.0,
+        "ev_to_ebitda": 26.0
+      }
+    },
+    "XOM": {
+      "asset_type": "equity",
+      "benchmark_index": "SPX",
+      "sector": "Energy",
+      "company": {
+        "revenue_growth": 0.06,
+        "earnings_growth": 0.07,
+        "gross_margin": 0.32,
+        "free_cash_flow_margin": 0.14,
+        "return_on_equity": 0.23,
+        "debt_to_equity": 0.21,
+        "net_debt_to_ebitda": 0.50,
+        "interest_coverage": 16.0,
+        "pe_ratio": 14.0,
+        "ev_to_ebitda": 8.0
+      }
+    },
+    "COST": {
+      "asset_type": "equity",
+      "benchmark_index": "SPX",
+      "sector": "Consumer Staples",
+      "company": {
+        "revenue_growth": 0.09,
+        "earnings_growth": 0.11,
+        "gross_margin": 0.13,
+        "free_cash_flow_margin": 0.04,
+        "return_on_equity": 0.31,
+        "debt_to_equity": 0.42,
+        "net_debt_to_ebitda": 0.60,
+        "interest_coverage": 17.0,
+        "pe_ratio": 39.0,
+        "ev_to_ebitda": 24.0
+      }
+    },
+    "AVGO": {
+      "asset_type": "equity",
+      "benchmark_index": "NDX",
+      "sector": "Semiconductors",
+      "company": {
+        "revenue_growth": 0.17,
+        "earnings_growth": 0.18,
+        "gross_margin": 0.76,
+        "free_cash_flow_margin": 0.41,
+        "return_on_equity": 0.52,
+        "debt_to_equity": 0.95,
+        "net_debt_to_ebitda": 1.90,
+        "interest_coverage": 8.0,
+        "pe_ratio": 27.0,
+        "ev_to_ebitda": 20.0
       }
     },
     "SPX": {

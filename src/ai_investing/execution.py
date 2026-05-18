@@ -4,7 +4,7 @@ import hashlib
 import json
 import os
 import tempfile
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from .alpaca import AlpacaClient
@@ -53,6 +53,15 @@ class RuntimeState:
     high_water_mark: float = 0.0
     last_rebalance_date: str | None = None
     pending_rebalance: PendingRebalanceState | None = None
+
+
+@dataclass(frozen=True)
+class ExecutionResult:
+    actions: list[RebalanceAction]
+    responses: list[dict[str, object]]
+    state: RuntimeState
+    submitted_actions: list[RebalanceAction] = field(default_factory=list)
+    skipped_messages: list[str] = field(default_factory=list)
 
 
 def load_state(path: Path) -> RuntimeState:
@@ -152,7 +161,7 @@ def execute_rebalance(
     live_price_feed: str,
     max_price_drift_pct: float,
     max_drawdown: float = 0.20,
-) -> tuple[list[RebalanceAction], list[dict[str, object]], RuntimeState]:
+) -> ExecutionResult:
     account = client.get_account()
     state = load_state(state_path)
     state.high_water_mark = max(state.high_water_mark, account.equity)
@@ -172,7 +181,7 @@ def execute_rebalance(
         save_state(state_path, state)
         if pending_status.has_open_orders:
             actions = [order.to_action() for order in state.pending_rebalance.actions]
-            return actions, [], state
+            return ExecutionResult(actions=actions, responses=[], state=state)
         state.pending_rebalance = None
         save_state(state_path, state)
 
@@ -196,37 +205,46 @@ def execute_rebalance(
     )
 
     if not force and state.last_rebalance_date == signal_date and pending_status is None:
-        return [], [], state
+        return ExecutionResult(actions=[], responses=[], state=state)
 
     if not planned_actions:
         state.last_rebalance_date = signal_date
         save_state(state_path, state)
-        return [], [], state
+        return ExecutionResult(actions=[], responses=[], state=state)
 
     if not submit:
-        return planned_actions, [], state
+        return ExecutionResult(actions=planned_actions, responses=[], state=state)
 
     if not is_paper and not allow_live:
         raise RuntimeError(
             "Live trading is blocked. Set AI_INVESTING_ENABLE_LIVE=1 to allow it."
         )
 
-    pending_rebalance = _build_pending_rebalance(signal, planned_actions)
+    live_prices = client.get_latest_trade_prices(
+        symbols=sorted({action.symbol for action in planned_actions}),
+        feed=live_price_feed,
+    )
+    eligible_actions, skipped_messages = _filter_actions_for_price_drift(
+        planned_actions,
+        live_prices,
+        max_price_drift_pct=max_price_drift_pct,
+    )
+    if not eligible_actions:
+        return ExecutionResult(
+            actions=planned_actions,
+            responses=[],
+            state=state,
+            submitted_actions=[],
+            skipped_messages=skipped_messages,
+        )
+
+    pending_rebalance = _build_pending_rebalance(signal, eligible_actions)
     state.pending_rebalance = pending_rebalance
     save_state(state_path, state)
 
     _validate_rebalance_capacity(
         account,
-        planned_actions,
-        max_price_drift_pct=max_price_drift_pct,
-    )
-    live_prices = client.get_latest_trade_prices(
-        symbols=sorted({action.symbol for action in planned_actions}),
-        feed=live_price_feed,
-    )
-    _validate_price_drift(
-        planned_actions,
-        live_prices,
+        eligible_actions,
         max_price_drift_pct=max_price_drift_pct,
     )
 
@@ -270,9 +288,21 @@ def execute_rebalance(
         if not residual_actions:
             state.last_rebalance_date = signal_date
             save_state(state_path, state)
-        return residual_actions, responses, state
+        return ExecutionResult(
+            actions=residual_actions,
+            responses=responses,
+            state=state,
+            submitted_actions=eligible_actions,
+            skipped_messages=skipped_messages,
+        )
 
-    return planned_actions, responses, state
+    return ExecutionResult(
+        actions=eligible_actions,
+        responses=responses,
+        state=state,
+        submitted_actions=eligible_actions,
+        skipped_messages=skipped_messages,
+    )
 
 
 def _ensure_pending_rebalance_matches_signal(
@@ -406,12 +436,14 @@ def _validate_rebalance_capacity(
         )
 
 
-def _validate_price_drift(
+def _filter_actions_for_price_drift(
     actions: list[RebalanceAction],
     live_prices: dict[str, float],
     *,
     max_price_drift_pct: float,
-) -> None:
+) -> tuple[list[RebalanceAction], list[str]]:
+    eligible_actions: list[RebalanceAction] = []
+    skipped_messages: list[str] = []
     for action in actions:
         if action.reference_price is None or action.reference_price <= 0:
             raise RuntimeError(
@@ -419,14 +451,18 @@ def _validate_price_drift(
             )
         live_price = live_prices.get(action.symbol)
         if live_price is None:
-            raise RuntimeError(
-                f"Missing current market price for {action.symbol}; refusing to submit orders."
+            skipped_messages.append(
+                f"{action.symbol}: missing current market price; skipped for this run."
             )
+            continue
         drift_pct = abs(live_price - action.reference_price) / action.reference_price
         if drift_pct > max_price_drift_pct:
-            raise RuntimeError(
-                f"Price drift for {action.symbol} is {drift_pct:.2%}, which exceeds the allowed {max_price_drift_pct:.2%}."
+            skipped_messages.append(
+                f"{action.symbol}: price drift is {drift_pct:.2%}, above the allowed {max_price_drift_pct:.2%}; skipped for this run."
             )
+            continue
+        eligible_actions.append(action)
+    return eligible_actions, skipped_messages
 
 
 def _is_order_open(status: str, order_payload: dict[str, object]) -> bool:

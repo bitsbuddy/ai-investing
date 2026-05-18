@@ -22,6 +22,7 @@ class _FakeClient:
         self.orders_by_client_order_id: dict[str, dict[str, object]] = {}
         self.positions: dict[str, float] = {}
         self.prices = {"SPY": 100.0, "QQQ": 200.0}
+        self.live_prices = dict(self.prices)
 
     def get_account(self) -> AccountSnapshot:
         return AccountSnapshot(equity=100000.0, cash=100000.0, buying_power=100000.0)
@@ -38,7 +39,7 @@ class _FakeClient:
         ]
 
     def get_latest_trade_prices(self, *, symbols: list[str], feed: str) -> dict[str, float]:
-        return {symbol: self.prices[symbol] for symbol in symbols}
+        return {symbol: self.live_prices[symbol] for symbol in symbols}
 
     def get_order_by_client_order_id(self, client_order_id: str) -> dict[str, object] | None:
         return self.orders_by_client_order_id.get(client_order_id)
@@ -125,7 +126,7 @@ class ExecutionTests(unittest.TestCase):
                 first_client.orders_by_client_order_id
             )
             second_client.positions.update(first_client.positions)
-            actions, responses, final_state = execute_rebalance(
+            result = execute_rebalance(
                 client=second_client,
                 signal=signal,
                 state_path=state_path,
@@ -138,10 +139,10 @@ class ExecutionTests(unittest.TestCase):
                 max_price_drift_pct=0.02,
             )
 
-            self.assertEqual(len(actions), 0)
-            self.assertEqual(len(responses), 1)
-            self.assertIsNone(final_state.pending_rebalance)
-            self.assertEqual(final_state.last_rebalance_date, "2026-05-16")
+            self.assertEqual(len(result.actions), 0)
+            self.assertEqual(len(result.responses), 1)
+            self.assertIsNone(result.state.pending_rebalance)
+            self.assertEqual(result.state.last_rebalance_date, "2026-05-16")
 
     def test_execute_rebalance_keeps_open_orders_pending(self) -> None:
         signal = Signal(
@@ -155,7 +156,7 @@ class ExecutionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             state_path = Path(tmpdir) / "state.json"
             client = _FakeClient(submitted_order_status="new")
-            actions, responses, final_state = execute_rebalance(
+            result = execute_rebalance(
                 client=client,
                 signal=signal,
                 state_path=state_path,
@@ -168,10 +169,46 @@ class ExecutionTests(unittest.TestCase):
                 max_price_drift_pct=0.02,
             )
 
-            self.assertEqual(len(actions), 1)
-            self.assertEqual(len(responses), 1)
-            self.assertIsNotNone(final_state.pending_rebalance)
-            self.assertIsNone(final_state.last_rebalance_date)
+            self.assertEqual(len(result.actions), 1)
+            self.assertEqual(len(result.responses), 1)
+            self.assertIsNotNone(result.state.pending_rebalance)
+            self.assertIsNone(result.state.last_rebalance_date)
+
+    def test_execute_rebalance_skips_only_drifted_symbols(self) -> None:
+        signal = Signal(
+            as_of=date(2026, 5, 16),
+            regime="risk_on",
+            weights={"SPY": 0.30, "QQQ": 0.30},
+            diagnostics={},
+        )
+        latest_prices = {"SPY": 100.0, "QQQ": 200.0}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_path = Path(tmpdir) / "state.json"
+            client = _FakeClient()
+            client.live_prices["QQQ"] = 210.0
+
+            result = execute_rebalance(
+                client=client,
+                signal=signal,
+                state_path=state_path,
+                latest_prices=latest_prices,
+                allow_live=False,
+                is_paper=True,
+                submit=True,
+                force=False,
+                live_price_feed="iex",
+                max_price_drift_pct=0.02,
+            )
+
+            self.assertEqual(len(result.responses), 1)
+            self.assertEqual(len(result.submitted_actions), 1)
+            self.assertEqual(result.submitted_actions[0].symbol, "SPY")
+            self.assertEqual(len(result.skipped_messages), 1)
+            self.assertIn("QQQ", result.skipped_messages[0])
+            self.assertEqual(len(result.actions), 1)
+            self.assertEqual(result.actions[0].symbol, "QQQ")
+            self.assertIsNone(result.state.last_rebalance_date)
 
 
 if __name__ == "__main__":

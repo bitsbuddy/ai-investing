@@ -483,7 +483,7 @@ def _render_ui_html(
       min-height: 100vh;
     }}
     .shell {{
-      max-width: 900px;
+      max-width: 1240px;
       margin: 48px auto;
       padding: 24px;
     }}
@@ -623,27 +623,73 @@ def _render_ui_html(
       max-height: 320px;
       overflow: auto;
     }}
-    .profiles {{
-      margin-top: 28px;
-      display: grid;
+    .profile-toolbar {{
+      display: flex;
+      justify-content: space-between;
       gap: 18px;
+      align-items: flex-start;
+      flex-wrap: wrap;
+    }}
+    .profile-toolbar h2 {{
+      margin: 0 0 8px;
+      font-size: 1.4rem;
+    }}
+    .profile-summary-grid {{
+      margin-top: 18px;
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 12px;
+    }}
+    .summary-chip {{
+      background: #faf6ee;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 14px 16px;
+    }}
+    .summary-chip span {{
+      display: block;
+      color: var(--muted);
+      font-size: 0.82rem;
+      margin-bottom: 4px;
+    }}
+    .summary-chip strong {{
+      font-size: 1.2rem;
+    }}
+    .profiles-grid {{
+      margin-top: 22px;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 18px;
+      align-items: start;
     }}
     .profile-card {{
       background: var(--soft);
       border: 1px solid var(--line);
-      border-radius: 18px;
+      border-radius: 20px;
       padding: 18px;
+      display: grid;
+      gap: 14px;
     }}
-    .profile-header {{
+    .profile-top {{
       display: flex;
       justify-content: space-between;
-      gap: 16px;
-      align-items: baseline;
-      margin-bottom: 14px;
+      gap: 12px;
+      align-items: flex-start;
     }}
-    .profile-header h2 {{
+    .profile-title-row {{
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }}
+    .profile-title-row h3 {{
       margin: 0;
-      font-size: 1.1rem;
+      font-size: 1.12rem;
+    }}
+    .profile-subtle {{
+      margin-top: 6px;
+      font-size: 0.88rem;
+      color: var(--muted);
     }}
     .badge {{
       display: inline-block;
@@ -653,11 +699,97 @@ def _render_ui_html(
       background: #e9dfcf;
       color: var(--ink);
     }}
+    .status-pill {{
+      display: inline-block;
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 0.8rem;
+      font-weight: 700;
+      white-space: nowrap;
+    }}
+    .status-ready {{
+      background: rgba(31, 122, 77, 0.12);
+      color: var(--enabled);
+    }}
+    .status-running {{
+      background: rgba(24, 78, 119, 0.12);
+      color: var(--accent);
+    }}
+    .status-failed {{
+      background: rgba(155, 44, 44, 0.12);
+      color: var(--disabled);
+    }}
+    .status-setup {{
+      background: rgba(111, 78, 55, 0.12);
+      color: #6f4e37;
+    }}
+    .profile-kpis {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }}
+    .kpi {{
+      background: #faf6ee;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 12px;
+    }}
+    .kpi span {{
+      display: block;
+      color: var(--muted);
+      font-size: 0.8rem;
+      margin-bottom: 4px;
+    }}
+    .kpi strong {{
+      font-size: 0.96rem;
+      color: var(--ink);
+      word-break: break-word;
+    }}
+    .profile-message {{
+      color: var(--ink);
+      min-height: 3em;
+    }}
     .profile-actions {{
       display: flex;
       gap: 10px;
       flex-wrap: wrap;
-      margin-top: 12px;
+    }}
+    .accordion {{
+      background: #faf6ee;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 0 14px 14px;
+    }}
+    .accordion summary {{
+      list-style: none;
+      cursor: pointer;
+      padding: 14px 0;
+      font-weight: 700;
+      color: var(--ink);
+    }}
+    .accordion summary::-webkit-details-marker {{
+      display: none;
+    }}
+    .accordion[open] summary {{
+      margin-bottom: 8px;
+    }}
+    .accordion-body {{
+      display: grid;
+      gap: 12px;
+    }}
+    .mini-meta {{
+      display: grid;
+      gap: 0;
+    }}
+    .mini-row {{
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 8px 0;
+      border-bottom: 1px solid rgba(216, 207, 190, 0.7);
+    }}
+    .mini-row:last-child {{
+      border-bottom: 0;
     }}
     .row {{
       display: flex;
@@ -676,10 +808,22 @@ def _render_ui_html(
       color: var(--accent);
       word-break: break-all;
     }}
+    .compact-log {{
+      max-height: 180px;
+    }}
+    @media (max-width: 1080px) {{
+      .profiles-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+      .profile-summary-grid {{ grid-template-columns: repeat(3, minmax(0, 1fr)); }}
+    }}
     @media (max-width: 720px) {{
       .shell {{ margin: 20px auto; padding: 14px; }}
       .card {{ padding: 20px; border-radius: 18px; }}
       .panels {{ grid-template-columns: 1fr; }}
+      .profile-summary-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+      .profiles-grid {{ grid-template-columns: 1fr; }}
+      .profile-top {{ flex-direction: column; }}
+      .profile-kpis {{ grid-template-columns: 1fr; }}
+      .mini-row {{ flex-direction: column; }}
       .row {{ flex-direction: column; }}
       .label {{ min-width: 0; }}
     }}
@@ -820,6 +964,22 @@ def _render_profile_controls_section(
             "</div>"
         )
 
+    running_profiles = sum(
+        1 for profile in profiles if profile.run_phase in {"queued", "running"}
+    )
+    setup_profiles = sum(
+        1 for profile in profiles if not (profile.has_api_key and profile.has_secret_key)
+    )
+    failed_profiles = sum(1 for profile in profiles if profile.last_result == "failed")
+    ready_profiles = sum(
+        1
+        for profile in profiles
+        if profile.has_api_key
+        and profile.has_secret_key
+        and profile.run_phase not in {"queued", "running"}
+        and profile.last_result != "failed"
+    )
+
     cards = []
     for profile in profiles:
         recent_logs = (
@@ -827,90 +987,152 @@ def _render_profile_controls_section(
             if profile.recent_log_lines
             else "No profile log output yet."
         )
+        status_label, status_class = _profile_status_badge(profile)
         cards.append(
             f"""
       <div class="profile-card">
-        <div class="profile-header">
-          <h2>{escape(profile.profile_name)}</h2>
-          <span class="badge">{escape(profile.risk_profile)}</span>
+        <div class="profile-top">
+          <div>
+            <div class="profile-title-row">
+              <h3>{escape(profile.profile_name)}</h3>
+              <span class="badge">{escape(profile.risk_profile)}</span>
+            </div>
+            <div class="profile-subtle">{escape(str(profile.env_path))}</div>
+          </div>
+          <span class="status-pill {status_class}">{escape(status_label)}</span>
         </div>
-        <p>Run state: <strong>{escape(profile.run_phase)}</strong> | Last result: <strong>{escape(profile.last_result or "unknown")}</strong></p>
-        <p>Last message: <strong>{escape(profile.last_message or "none")}</strong></p>
-        <div class="meta">
-          <div class="row">
-            <div class="label">Env File</div>
-            <code>{escape(str(profile.env_path))}</code>
+        <div class="profile-kpis">
+          <div class="kpi">
+            <span>Run Phase</span>
+            <strong>{escape(profile.run_phase)}</strong>
           </div>
-          <div class="row">
-            <div class="label">Portfolio State</div>
-            <code>{escape(str(profile.state_path))}</code>
+          <div class="kpi">
+            <span>Last Result</span>
+            <strong>{escape(profile.last_result or "unknown")}</strong>
           </div>
-          <div class="row">
-            <div class="label">UI Run Status</div>
-            <code>{escape(str(profile.status_path))}</code>
-          </div>
-          <div class="row">
-            <div class="label">Log File</div>
-            <code>{escape(str(profile.log_path))}</code>
-          </div>
-          <div class="row">
-            <div class="label">Alpaca Key</div>
+          <div class="kpi">
+            <span>Alpaca Key</span>
             <strong>{escape(profile.api_key_preview or "missing")}</strong>
           </div>
-          <div class="row">
-            <div class="label">Secret Key</div>
-            <strong>{'present' if profile.has_secret_key else 'missing'}</strong>
+          <div class="kpi">
+            <span>Baseline</span>
+            <strong>{escape(profile.performance_baseline or "not set")}</strong>
           </div>
         </div>
-        <form class="stack-form" method="post" action="/profile-save">
-          <input type="hidden" name="profile_key" value="{escape(profile.key)}">
-          <label>Profile Name
-            <input type="text" name="profile_name" value="{escape(profile.profile_name)}">
-          </label>
-          <label>Risk Profile
-            <select name="risk_profile">
-              {_render_risk_profile_options(profile.risk_profile)}
-            </select>
-          </label>
-          <label>Alpaca API Key
-            <input type="text" name="alpaca_api_key" value="{escape(_read_env_value(profile.env_path, 'ALPACA_API_KEY'))}">
-          </label>
-          <label>Alpaca Secret Key
-            <input type="password" name="alpaca_secret_key" value="{escape(_read_env_value(profile.env_path, 'ALPACA_SECRET_KEY'))}">
-          </label>
-          <label>Performance Baseline
-            <input type="text" name="performance_baseline" value="{escape(profile.performance_baseline)}">
-          </label>
-          <div class="profile-actions">
-            <button class="save" type="submit">Save Settings</button>
-          </div>
-        </form>
+        <p class="profile-message"><strong>Last message:</strong> {escape(profile.last_message or "none")}</p>
         <div class="profile-actions">
           <form method="post" action="/profile-run">
             <input type="hidden" name="profile_key" value="{escape(profile.key)}">
             <button class="run-now" type="submit" {'disabled aria-disabled="true"' if profile.run_phase == 'running' else ''}>Run {escape(profile.profile_name)}</button>
           </form>
         </div>
-        <div class="logbox">{recent_logs}</div>
+        <details class="accordion">
+          <summary>Edit Settings</summary>
+          <div class="accordion-body">
+            <form class="stack-form" method="post" action="/profile-save">
+              <input type="hidden" name="profile_key" value="{escape(profile.key)}">
+              <label>Profile Name
+                <input type="text" name="profile_name" value="{escape(profile.profile_name)}">
+              </label>
+              <label>Risk Profile
+                <select name="risk_profile">
+                  {_render_risk_profile_options(profile.risk_profile)}
+                </select>
+              </label>
+              <label>Alpaca API Key
+                <input type="text" name="alpaca_api_key" value="{escape(_read_env_value(profile.env_path, 'ALPACA_API_KEY'))}">
+              </label>
+              <label>Alpaca Secret Key
+                <input type="password" name="alpaca_secret_key" value="{escape(_read_env_value(profile.env_path, 'ALPACA_SECRET_KEY'))}">
+              </label>
+              <label>Performance Baseline
+                <input type="text" name="performance_baseline" value="{escape(profile.performance_baseline)}">
+              </label>
+              <div class="profile-actions">
+                <button class="save" type="submit">Save Settings</button>
+              </div>
+            </form>
+          </div>
+        </details>
+        <details class="accordion">
+          <summary>Logs and Paths</summary>
+          <div class="accordion-body">
+            <div class="mini-meta">
+              <div class="mini-row">
+                <div class="label">Portfolio State</div>
+                <code>{escape(str(profile.state_path))}</code>
+              </div>
+              <div class="mini-row">
+                <div class="label">UI Run Status</div>
+                <code>{escape(str(profile.status_path))}</code>
+              </div>
+              <div class="mini-row">
+                <div class="label">Log File</div>
+                <code>{escape(str(profile.log_path))}</code>
+              </div>
+              <div class="mini-row">
+                <div class="label">Secret Key</div>
+                <strong>{'present' if profile.has_secret_key else 'missing'}</strong>
+              </div>
+            </div>
+            <div class="logbox compact-log">{recent_logs}</div>
+          </div>
+        </details>
       </div>
 """
         )
 
     return f"""
       <div class="panel" style="margin-top: 28px;">
-        <h2>Multi-Profile Controls</h2>
-        <p>Manage risk profile settings and Alpaca credentials for multiple paper accounts from one page.</p>
-        <p>Manifest: <code>{escape(str(manifest_path))}</code></p>
-        <div class="profile-actions">
-          <form method="post" action="/profiles-run-all">
-            <button class="run-now" type="submit">Run All Profiles</button>
-          </form>
+        <div class="profile-toolbar">
+          <div>
+            <h2>Multi-Profile Controls</h2>
+            <p>Compare profiles side by side, run them independently, and only open settings when you need them.</p>
+            <p>Manifest: <code>{escape(str(manifest_path))}</code></p>
+          </div>
+          <div class="profile-actions">
+            <form method="post" action="/profiles-run-all">
+              <button class="run-now" type="submit">Run All Profiles</button>
+            </form>
+          </div>
         </div>
-        <div class="profiles">
+        <div class="profile-summary-grid">
+          <div class="summary-chip">
+            <span>Total Profiles</span>
+            <strong>{len(profiles)}</strong>
+          </div>
+          <div class="summary-chip">
+            <span>Ready</span>
+            <strong>{ready_profiles}</strong>
+          </div>
+          <div class="summary-chip">
+            <span>Running</span>
+            <strong>{running_profiles}</strong>
+          </div>
+          <div class="summary-chip">
+            <span>Need Setup</span>
+            <strong>{setup_profiles}</strong>
+          </div>
+          <div class="summary-chip">
+            <span>Failed Last Run</span>
+            <strong>{failed_profiles}</strong>
+          </div>
+        </div>
+        <div class="profiles-grid">
           {''.join(cards)}
         </div>
       </div>
 """
+
+
+def _profile_status_badge(profile: ProfileControlStatus) -> tuple[str, str]:
+    if profile.run_phase in {"queued", "running"}:
+        return "running", "status-running"
+    if not (profile.has_api_key and profile.has_secret_key):
+        return "needs setup", "status-setup"
+    if profile.last_result == "failed":
+        return "failed", "status-failed"
+    return "ready", "status-ready"
 
 
 def _render_risk_profile_options(current_value: str) -> str:

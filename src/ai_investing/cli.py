@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
@@ -18,8 +19,14 @@ from .config import (
     load_runtime_config,
     require_broker_credentials,
 )
-from .execution import execute_rebalance
-from .models import OfficialNewsContext, ResearchSnapshot, ResearchWeights, StrategyParameters
+from .execution import RuntimeState, execute_rebalance, save_state
+from .models import (
+    OfficialNewsContext,
+    RebalanceAction,
+    ResearchSnapshot,
+    ResearchWeights,
+    StrategyParameters,
+)
 from .news import build_official_news_context, summarize_official_news
 from .profiles import (
     default_profile_matrix_entries,
@@ -63,6 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
     automation_setup.add_argument("--script-file", default="scripts/run_paper_trade.sh")
     automation_setup.add_argument("--cron-file", default="automation/paper_trade.cron")
     automation_setup.add_argument("--status-file", default="automation/paper_trade.status")
+    automation_setup.add_argument("--manifest", default="profiles/profile_matrix.json")
     automation_setup.add_argument("--hour", type=int, default=9)
     automation_setup.add_argument("--minute", type=int, default=40)
     automation_setup.add_argument("--preview-only", action="store_true")
@@ -126,6 +134,9 @@ def build_parser() -> argparse.ArgumentParser:
     multi_profile_run.add_argument("--official-news-lookback-days", type=int, default=None)
     multi_profile_run.add_argument("--require-official-news", action="store_true")
     multi_profile_run.add_argument("--require-llm-news", action="store_true")
+    multi_profile_run.add_argument("--manual", action="store_true")
+    multi_profile_run.add_argument("--preview-only", action="store_true")
+    multi_profile_run.add_argument("--allow-failures", action="store_true")
 
     multi_profile_report = subparsers.add_parser(
         "multi-profile-report",
@@ -163,6 +174,21 @@ def build_parser() -> argparse.ArgumentParser:
     trade.add_argument("--official-news-lookback-days", type=int, default=None)
     trade.add_argument("--require-official-news", action="store_true")
     trade.add_argument("--require-llm-news", action="store_true")
+
+    reset_account = subparsers.add_parser(
+        "reset-account",
+        help="Cancel open orders, liquidate positions, and clear local trading state.",
+    )
+    reset_account.add_argument(
+        "--keep-state",
+        action="store_true",
+        help="Keep the local state file instead of clearing it after liquidation.",
+    )
+    reset_account.add_argument(
+        "--allow-live",
+        action="store_true",
+        help="Allow resetting a live account. Paper accounts do not need this flag.",
+    )
 
     research = subparsers.add_parser(
         "research", help="Run multi-layer company/index/ETF analysis."
@@ -227,6 +253,9 @@ def main() -> None:
     if args.command == "trade":
         _run_trade_command(client, broker_config.paper, runtime_config, args)
         return
+    if args.command == "reset-account":
+        _run_reset_account_command(client, broker_config.paper, runtime_config, args)
+        return
     if args.command == "automation-run":
         _run_automation_trade_command(client, broker_config.paper, runtime_config, args)
         return
@@ -241,6 +270,7 @@ def _run_backtest_command(
         symbols=list(
             dict.fromkeys(
                 list(runtime_config.risk_on_universe)
+                + list(runtime_config.equity_universe)
                 + list(runtime_config.defensive_universe)
             )
         ),
@@ -253,6 +283,7 @@ def _run_backtest_command(
     if args.no_optimize:
         strategy = ETFMomentumStrategy(
             risk_on_universe=runtime_config.risk_on_universe,
+            equity_universe=runtime_config.equity_universe,
             defensive_universe=runtime_config.defensive_universe,
             params=base_params,
         )
@@ -262,6 +293,7 @@ def _run_backtest_command(
         result = run_walk_forward_backtest(
             history,
             risk_on_universe=runtime_config.risk_on_universe,
+            equity_universe=runtime_config.equity_universe,
             defensive_universe=runtime_config.defensive_universe,
             base_params=base_params,
             training_window=args.training_window_bars,
@@ -409,6 +441,7 @@ def _run_automation_setup_command(
     cron_path = Path(args.cron_file).resolve()
     control_path = Path("automation/paper_trade.enabled").resolve()
     status_path = Path(args.status_file).resolve()
+    manifest_path = Path(args.manifest).resolve()
 
     if not env_path.exists():
         raise FileNotFoundError(
@@ -437,6 +470,7 @@ def _run_automation_setup_command(
         _render_automation_script(
             repo_root=repo_root,
             env_path=env_path,
+            manifest_path=manifest_path,
             python_path=Path(sys.executable).resolve(),
             control_path=control_path,
             status_path=status_path,
@@ -463,6 +497,9 @@ def _run_automation_setup_command(
     print(f"- status file: {status_path}")
     print(f"- schedule: weekdays at {args.hour:02d}:{args.minute:02d} (system local time)")
     print("- log file: logs/paper-trade.log")
+    print(
+        f"- profile mode: {'multi-profile matrix' if manifest_path.exists() else 'single env file'}"
+    )
     print("")
     print("Next Steps")
     print(f"- crontab {cron_path}")
@@ -508,6 +545,8 @@ def _run_automation_ui_command(args: argparse.Namespace) -> None:
 def _run_multi_profile_run_command(args: argparse.Namespace) -> None:
     entries = load_profile_matrix(Path(args.manifest))
     failures: list[str] = []
+    skipped: list[str] = []
+    successes = 0
 
     for entry in entries:
         print("")
@@ -517,6 +556,11 @@ def _run_multi_profile_run_command(args: argparse.Namespace) -> None:
         print(
             f"=== {runtime_config.profile_name} ({runtime_config.risk_profile}) | {entry.env_file} ==="
         )
+        if not _has_usable_broker_credentials(broker_config):
+            message = "Profile skipped: missing or placeholder Alpaca credentials."
+            skipped.append(f"{runtime_config.profile_name}: {message}")
+            print(message)
+            continue
         try:
             require_broker_credentials(broker_config)
             client = AlpacaClient(broker_config)
@@ -532,8 +576,8 @@ def _run_multi_profile_run_command(args: argparse.Namespace) -> None:
                 official_news_lookback_days=args.official_news_lookback_days,
                 require_official_news=args.require_official_news,
                 require_llm_news=args.require_llm_news,
-                manual=True,
-                preview_only=False,
+                manual=args.manual,
+                preview_only=args.preview_only,
             )
             if args.submit:
                 _run_automation_trade_command(
@@ -546,6 +590,7 @@ def _run_multi_profile_run_command(args: argparse.Namespace) -> None:
             total_return = (
                 (account.equity / baseline) - 1.0 if baseline > 0 else 0.0
             )
+            successes += 1
             print(
                 f"Profile account equity: ${account.equity:,.2f} | baseline ${baseline:,.2f} | return {total_return:.2%}"
             )
@@ -553,8 +598,16 @@ def _run_multi_profile_run_command(args: argparse.Namespace) -> None:
             failures.append(f"{runtime_config.profile_name}: {exc}")
             print(f"Profile failed: {exc}")
 
-    if failures:
+    print("")
+    print(
+        f"Multi-profile summary: {successes} succeeded | {len(skipped)} skipped | {len(failures)} failed"
+    )
+
+    if failures and not args.allow_failures:
         raise RuntimeError("One or more profiles failed:\n- " + "\n- ".join(failures))
+    if successes == 0 and (failures or skipped):
+        details = failures or skipped
+        raise RuntimeError("No profiles completed successfully:\n- " + "\n- ".join(details))
 
 
 def _run_multi_profile_report_command(args: argparse.Namespace) -> None:
@@ -633,7 +686,7 @@ def _run_trade_command(
     latest_prices = {
         symbol: closes[signal_index] for symbol, closes in history.closes.items()
     }
-    actions, responses, state = execute_rebalance(
+    result = execute_rebalance(
         client=client,
         signal=signal,
         state_path=runtime_config.state_path,
@@ -645,13 +698,26 @@ def _run_trade_command(
         live_price_feed=args.feed or runtime_config.default_feed,
         max_price_drift_pct=runtime_config.max_price_drift_pct,
     )
+    actions = result.actions
+    responses = result.responses
+    state = result.state
 
     print(f"Using parameters: {params}")
     _print_signal(signal)
     _print_official_news(signal.official_news)
     _print_selected_research(signal)
     print("")
-    if not actions:
+    if args.submit and result.submitted_actions:
+        print("Submitted Basket")
+        for action in result.submitted_actions:
+            if action.qty is None:
+                details = f"${action.notional:.2f}"
+            else:
+                details = f"{action.qty:.6f} shares"
+            print(
+                f"- {action.side.upper()} {action.symbol}: {details} ({action.reason})"
+            )
+    elif not actions:
         print("No rebalance required.")
     else:
         print("Planned Actions")
@@ -664,10 +730,66 @@ def _run_trade_command(
                 f"- {action.side.upper()} {action.symbol}: {details} ({action.reason})"
             )
 
+    if args.submit and actions and _actions_differ(actions, result.submitted_actions):
+        print("")
+        print("Remaining Actions")
+        for action in actions:
+            if action.qty is None:
+                details = f"${action.notional:.2f}"
+            else:
+                details = f"{action.qty:.6f} shares"
+            print(
+                f"- {action.side.upper()} {action.symbol}: {details} ({action.reason})"
+            )
+
+    if result.skipped_messages:
+        print("")
+        print("Skipped Actions")
+        for message in result.skipped_messages:
+            print(f"- {message}")
+
     if args.submit:
         print("")
         print(f"Submitted {len(responses)} orders.")
         print(f"High-water mark: ${state.high_water_mark:.2f}")
+
+
+def _run_reset_account_command(
+    client: AlpacaClient,
+    is_paper: bool,
+    runtime_config,
+    args: argparse.Namespace,
+) -> None:
+    if not is_paper and not args.allow_live:
+        raise RuntimeError(
+            "Refusing to reset a live account without --allow-live."
+        )
+
+    positions = client.get_positions()
+    if positions:
+        print("Current Positions")
+        for position in positions:
+            print(
+                f"- {position.symbol}: qty={position.qty:.6f} | market_value=${position.market_value:,.2f}"
+            )
+    else:
+        print("Current Positions")
+        print("- none")
+
+    cancel_responses = client.cancel_all_orders()
+    print("")
+    print(f"Canceled open orders: {len(cancel_responses)}")
+
+    liquidation_responses: list[dict[str, object]] = []
+    if positions:
+        liquidation_responses = client.close_all_positions(cancel_orders=False)
+    print(f"Submitted liquidation orders: {len(liquidation_responses)}")
+
+    if args.keep_state:
+        print(f"Kept local state: {runtime_config.state_path}")
+    else:
+        save_state(runtime_config.state_path, RuntimeState())
+        print(f"Cleared local state: {runtime_config.state_path}")
 
 
 def _run_automation_trade_command(
@@ -783,7 +905,9 @@ def _compute_latest_signal(
     start = end - timedelta(days=lookback_days)
     symbols = list(
         dict.fromkeys(
-            list(runtime_config.risk_on_universe) + list(runtime_config.defensive_universe)
+            list(runtime_config.risk_on_universe)
+            + list(runtime_config.equity_universe)
+            + list(runtime_config.defensive_universe)
         )
     )
     history = _load_history(
@@ -816,6 +940,7 @@ def _compute_latest_signal(
     best_result = select_walk_forward_parameters(
         history,
         risk_on_universe=runtime_config.risk_on_universe,
+        equity_universe=runtime_config.equity_universe,
         defensive_universe=runtime_config.defensive_universe,
         base_params=base_params,
         signal_index=signal_index,
@@ -823,6 +948,7 @@ def _compute_latest_signal(
     )
     strategy = ETFMomentumStrategy(
         risk_on_universe=runtime_config.risk_on_universe,
+        equity_universe=runtime_config.equity_universe,
         defensive_universe=runtime_config.defensive_universe,
         params=best_result.params,
         research_overlay=research_overlay,
@@ -919,9 +1045,34 @@ def _format_assessment_line(assessment) -> str:
         if assessment.benchmark_index
         else ""
     )
+    sector = (
+        f" | sector={assessment.sector}"
+        if getattr(assessment, "sector", None)
+        else ""
+    )
     return (
         f"- {assessment.symbol}: total={assessment.total_score:.2f}"
-        f"{research} | {' '.join(component_parts)}{benchmark}"
+        f"{research} | {' '.join(component_parts)}{benchmark}{sector}"
+    )
+
+
+def _actions_differ(
+    left: list[RebalanceAction], right: list[RebalanceAction]
+) -> bool:
+    if len(left) != len(right):
+        return True
+    return [_action_key(action) for action in left] != [
+        _action_key(action) for action in right
+    ]
+
+
+def _action_key(action: RebalanceAction) -> tuple[str, str, float, float | None, str]:
+    return (
+        action.side,
+        action.symbol,
+        round(action.notional, 6),
+        None if action.qty is None else round(action.qty, 6),
+        action.reason,
     )
 
 
@@ -990,6 +1141,23 @@ def _has_broker_credentials(broker_config) -> bool:
     return bool(broker_config.api_key and broker_config.secret_key)
 
 
+def _has_usable_broker_credentials(broker_config) -> bool:
+    return _has_broker_credentials(broker_config) and not (
+        _looks_like_placeholder_credential(broker_config.api_key)
+        or _looks_like_placeholder_credential(broker_config.secret_key)
+    )
+
+
+def _looks_like_placeholder_credential(value: str) -> bool:
+    normalized = (value or "").strip().lower()
+    return (
+        normalized == ""
+        or normalized.startswith("your-")
+        or normalized.startswith("your_")
+        or "placeholder" in normalized
+    )
+
+
 def _resolve_research_snapshot_path(
     runtime_config, args: argparse.Namespace
 ) -> Path | None:
@@ -1030,6 +1198,7 @@ def _build_paper_env_payload(
         ),
         "AI_INVESTING_DEFAULT_FEED": runtime_config.default_feed,
         "AI_INVESTING_RISK_ON": ",".join(runtime_config.risk_on_universe),
+        "AI_INVESTING_EQUITIES": ",".join(runtime_config.equity_universe),
         "AI_INVESTING_DEFENSIVE": ",".join(runtime_config.defensive_universe),
         "AI_INVESTING_RESEARCH_SNAPSHOT_PATH": (
             str(research_snapshot_path) if research_snapshot_path is not None else ""
@@ -1058,6 +1227,8 @@ def _build_paper_env_payload(
         "AI_INVESTING_LLM_NEWS_MAX_ITEMS": str(runtime_config.llm_news_max_items),
         "AI_INVESTING_LLM_NEWS_MAX_CHARS": str(runtime_config.llm_news_max_chars),
         "AI_INVESTING_MAX_PRICE_DRIFT_PCT": str(runtime_config.max_price_drift_pct),
+        "AI_INVESTING_CA_BUNDLE": os.getenv("AI_INVESTING_CA_BUNDLE", ""),
+        "AI_INVESTING_SSL_NO_VERIFY": os.getenv("AI_INVESTING_SSL_NO_VERIFY", ""),
     }
 
 
@@ -1118,19 +1289,32 @@ def _render_automation_script(
     *,
     repo_root: Path,
     env_path: Path,
+    manifest_path: Path,
     python_path: Path,
     control_path: Path,
     status_path: Path,
     preview_only: bool,
 ) -> str:
-    preview_only_line = 'automation_args+=("--preview-only")\n' if preview_only else ""
+    multi_profile_preview_line = (
+        '  automation_args+=("--preview-only")\n' if preview_only else ""
+    )
+    multi_profile_submit_line = (
+        "" if preview_only else '  automation_args+=("--submit")\n'
+    )
+    single_profile_preview_line = (
+        '  automation_args+=("--preview-only")\n' if preview_only else ""
+    )
     return f"""#!/bin/zsh
 set -euo pipefail
 
 status_file="{status_path}"
 run_kind="scheduled"
-automation_args=("automation-run")
-{preview_only_line}if [ "${{AI_INVESTING_FORCE_RUN:-0}}" = "1" ]; then
+if [ -f "{manifest_path}" ]; then
+  automation_args=("multi-profile-run" "--manifest" "{manifest_path}" "--allow-failures")
+{multi_profile_submit_line}{multi_profile_preview_line}else
+  automation_args=("automation-run")
+{single_profile_preview_line}fi
+if [ "${{AI_INVESTING_FORCE_RUN:-0}}" = "1" ]; then
   automation_args+=("--manual")
 fi
 if [ "${{AI_INVESTING_FORCE_RUN:-0}}" = "1" ]; then

@@ -23,6 +23,11 @@ def _build_history() -> dict[str, dict[date, float]]:
         "IWM": _series(100, 0.0011, length),
         "EFA": _series(100, 0.0009, length),
         "EEM": _series(100, 0.0008, length),
+        "MSFT": _series(100, 0.0015, length),
+        "NVDA": _series(100, 0.0017, length),
+        "AMZN": _series(100, 0.0013, length),
+        "JPM": _series(100, 0.0010, length),
+        "XOM": _series(100, 0.00095, length),
         "TLT": _series(100, -0.0002, length),
         "IEF": _series(100, 0.0001, length),
         "GLD": _series(100, 0.0002, length),
@@ -51,6 +56,32 @@ class StrategyTests(unittest.TestCase):
         self.assertIn("QQQ", signal.weights)
         self.assertIn("SPY", signal.weights)
         self.assertLess(sum(signal.weights.values()), 1.0)
+
+    def test_strategy_can_hold_mixed_etf_and_equity_sleeves(self) -> None:
+        history = align_history(_build_history())
+        strategy = ETFMomentumStrategy(
+            risk_on_universe=("SPY", "QQQ", "IWM", "EFA", "EEM"),
+            equity_universe=("MSFT", "NVDA", "AMZN", "JPM", "XOM"),
+            defensive_universe=("TLT", "IEF", "GLD", "SHY"),
+            params=StrategyParameters(
+                top_n=2,
+                equity_count=3,
+                min_risk_on_positions=3,
+                target_equity_allocation=0.45,
+                max_position_weight=0.25,
+                max_equity_position_weight=0.12,
+                max_sector_weight=0.24,
+            ),
+        )
+
+        signal = strategy.signal_for_index(history, len(history.dates) - 1)
+
+        self.assertEqual(signal.regime, "risk_on")
+        self.assertIn("QQQ", signal.weights)
+        self.assertIn("SPY", signal.weights)
+        self.assertIn("MSFT", signal.weights)
+        self.assertLessEqual(signal.weights["MSFT"], 0.12 + 1e-9)
+        self.assertGreaterEqual(signal.diagnostics["selected_equity_count"], 1.0)
 
     def test_align_history_does_not_truncate_for_late_starting_symbols(self) -> None:
         history = _build_history()
