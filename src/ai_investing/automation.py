@@ -6,8 +6,13 @@ from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import os
 from pathlib import Path
+import shlex
 import subprocess
+from urllib.parse import parse_qs
 from zoneinfo import ZoneInfo
+
+from .config import load_runtime_config
+from .profiles import load_env_file, load_profile_matrix, write_env_file
 
 
 @dataclass(frozen=True)
@@ -26,6 +31,28 @@ class AutomationStatus:
     last_finished_at: str | None
     last_exit_code: str | None
     schedule: str | None
+    recent_log_lines: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ProfileControlStatus:
+    key: str
+    profile_name: str
+    risk_profile: str
+    env_path: Path
+    state_path: Path
+    status_path: Path
+    log_path: Path
+    has_api_key: bool
+    has_secret_key: bool
+    api_key_preview: str
+    performance_baseline: str
+    run_phase: str
+    last_result: str | None
+    last_message: str | None
+    last_started_at: str | None
+    last_finished_at: str | None
+    last_exit_code: str | None
     recent_log_lines: tuple[str, ...]
 
 
@@ -153,16 +180,131 @@ def load_automation_status(
     )
 
 
+def load_profile_control_statuses(
+    *,
+    manifest_path: Path,
+    profile_status_dir: Path,
+    profile_log_dir: Path,
+) -> tuple[ProfileControlStatus, ...]:
+    if not manifest_path.exists():
+        return ()
+
+    statuses: list[ProfileControlStatus] = []
+    for entry in load_profile_matrix(manifest_path):
+        env_values = load_env_file(entry.env_file) if entry.env_file.exists() else {}
+        runtime_config = load_runtime_config(env_values)
+        status_path = profile_status_dir / f"{entry.name}.status"
+        log_path = profile_log_dir / f"{entry.name}.log"
+        state = read_automation_state(status_path)
+        api_key = env_values.get("ALPACA_API_KEY", "")
+        secret_key = env_values.get("ALPACA_SECRET_KEY", "")
+        statuses.append(
+            ProfileControlStatus(
+                key=entry.name,
+                profile_name=(env_values.get("AI_INVESTING_PROFILE_NAME") or runtime_config.profile_name),
+                risk_profile=(
+                    env_values.get("AI_INVESTING_RISK_PROFILE")
+                    or runtime_config.risk_profile
+                ),
+                env_path=entry.env_file,
+                state_path=runtime_config.state_path,
+                status_path=status_path,
+                log_path=log_path,
+                has_api_key=bool(api_key),
+                has_secret_key=bool(secret_key),
+                api_key_preview=_mask_key(api_key),
+                performance_baseline=env_values.get(
+                    "AI_INVESTING_PERFORMANCE_BASELINE", ""
+                ),
+                run_phase=state.get("run_phase", "idle"),
+                last_result=state.get("last_result"),
+                last_message=state.get("last_message"),
+                last_started_at=state.get("last_started_at"),
+                last_finished_at=state.get("last_finished_at"),
+                last_exit_code=state.get("last_exit_code"),
+                recent_log_lines=read_recent_log_lines(log_path, limit=8),
+            )
+        )
+    return tuple(statuses)
+
+
+def save_profile_settings(
+    *,
+    env_path: Path,
+    profile_name: str,
+    risk_profile: str,
+    alpaca_api_key: str,
+    alpaca_secret_key: str,
+    performance_baseline: str,
+) -> None:
+    values = load_env_file(env_path)
+    values["AI_INVESTING_PROFILE_NAME"] = profile_name.strip() or risk_profile.title()
+    values["AI_INVESTING_RISK_PROFILE"] = risk_profile.strip().lower() or "balanced"
+    values["ALPACA_API_KEY"] = alpaca_api_key.strip()
+    values["ALPACA_SECRET_KEY"] = alpaca_secret_key.strip()
+    values["AI_INVESTING_PERFORMANCE_BASELINE"] = performance_baseline.strip()
+    write_env_file(env_path, values)
+
+
+def trigger_profile_manual_run(
+    *,
+    repo_root: Path,
+    python_path: Path,
+    env_path: Path,
+    status_path: Path,
+    log_path: Path,
+    profile_name: str,
+) -> tuple[bool, str]:
+    if not env_path.exists():
+        return False, "Profile env file is missing."
+    current_state = read_automation_state(status_path)
+    if current_state.get("run_phase") == "running":
+        return False, f"{profile_name} is already running."
+
+    now = _utc_now_label()
+    write_automation_state(
+        status_path,
+        run_phase="queued",
+        last_result="pending",
+        last_message=f"{profile_name} run requested from UI",
+        last_started_at=now,
+    )
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    status_path.parent.mkdir(parents=True, exist_ok=True)
+    shell_command = _render_profile_run_shell_command(
+        repo_root=repo_root,
+        python_path=python_path,
+        env_path=env_path,
+        status_path=status_path,
+        log_path=log_path,
+        profile_name=profile_name,
+    )
+    subprocess.Popen(
+        ["/bin/zsh", "-lc", shell_command],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+        env=os.environ.copy(),
+    )
+    return True, f"{profile_name} run started."
+
+
 def serve_automation_ui(
     *,
     host: str,
     port: int,
+    repo_root: Path,
+    python_path: Path,
     control_path: Path,
     script_path: Path,
     env_path: Path,
     cron_path: Path,
     log_path: Path,
     state_path: Path,
+    manifest_path: Path,
+    profile_status_dir: Path,
+    profile_log_dir: Path,
 ) -> None:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
@@ -177,14 +319,21 @@ def serve_automation_ui(
                 log_path=log_path,
                 state_path=state_path,
             )
+            profiles = load_profile_control_statuses(
+                manifest_path=manifest_path,
+                profile_status_dir=profile_status_dir,
+                profile_log_dir=profile_log_dir,
+            )
             body = _render_ui_html(
                 status=status,
+                profiles=profiles,
                 control_path=control_path,
                 script_path=script_path,
                 env_path=env_path,
                 cron_path=cron_path,
                 log_path=log_path,
                 state_path=state_path,
+                manifest_path=manifest_path,
             ).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -193,18 +342,79 @@ def serve_automation_ui(
             self.wfile.write(body)
 
         def do_POST(self) -> None:  # noqa: N802
+            fields = self._read_form_fields()
             if self.path == "/enable":
                 write_automation_enabled(control_path, True)
             elif self.path == "/disable":
                 write_automation_enabled(control_path, False)
             elif self.path == "/run-now":
                 trigger_manual_run(script_path=script_path, state_path=state_path)
+            elif self.path == "/profile-save":
+                key = fields.get("profile_key", "")
+                profile = _find_profile_status(
+                    key=key,
+                    manifest_path=manifest_path,
+                    profile_status_dir=profile_status_dir,
+                    profile_log_dir=profile_log_dir,
+                )
+                if profile is None:
+                    self.send_error(404)
+                    return
+                save_profile_settings(
+                    env_path=profile.env_path,
+                    profile_name=fields.get("profile_name", ""),
+                    risk_profile=fields.get("risk_profile", profile.risk_profile),
+                    alpaca_api_key=fields.get("alpaca_api_key", ""),
+                    alpaca_secret_key=fields.get("alpaca_secret_key", ""),
+                    performance_baseline=fields.get("performance_baseline", ""),
+                )
+            elif self.path == "/profile-run":
+                key = fields.get("profile_key", "")
+                profile = _find_profile_status(
+                    key=key,
+                    manifest_path=manifest_path,
+                    profile_status_dir=profile_status_dir,
+                    profile_log_dir=profile_log_dir,
+                )
+                if profile is None:
+                    self.send_error(404)
+                    return
+                trigger_profile_manual_run(
+                    repo_root=repo_root,
+                    python_path=python_path,
+                    env_path=profile.env_path,
+                    status_path=profile.status_path,
+                    log_path=profile.log_path,
+                    profile_name=profile.profile_name,
+                )
+            elif self.path == "/profiles-run-all":
+                for profile in load_profile_control_statuses(
+                    manifest_path=manifest_path,
+                    profile_status_dir=profile_status_dir,
+                    profile_log_dir=profile_log_dir,
+                ):
+                    trigger_profile_manual_run(
+                        repo_root=repo_root,
+                        python_path=python_path,
+                        env_path=profile.env_path,
+                        status_path=profile.status_path,
+                        log_path=profile.log_path,
+                        profile_name=profile.profile_name,
+                    )
             else:
                 self.send_error(404)
                 return
             self.send_response(303)
             self.send_header("Location", "/")
             self.end_headers()
+
+        def _read_form_fields(self) -> dict[str, str]:
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            if length <= 0:
+                return {}
+            raw = self.rfile.read(length).decode("utf-8", errors="replace")
+            parsed = parse_qs(raw, keep_blank_values=True)
+            return {key: values[0] for key, values in parsed.items() if values}
 
         def log_message(self, format: str, *args) -> None:  # noqa: A003
             return
@@ -219,18 +429,24 @@ def serve_automation_ui(
 def _render_ui_html(
     *,
     status: AutomationStatus,
+    profiles: tuple[ProfileControlStatus, ...],
     control_path: Path,
     script_path: Path,
     env_path: Path,
     cron_path: Path,
     log_path: Path,
     state_path: Path,
+    manifest_path: Path,
 ) -> str:
     state_label = "Enabled" if status.enabled else "Disabled"
     state_class = "enabled" if status.enabled else "disabled"
     summary = _status_summary(status)
     last_updated = _last_updated_label(status)
     run_now_disabled = 'disabled aria-disabled="true"' if status.run_phase == "running" else ""
+    profile_section = _render_profile_controls_section(
+        profiles=profiles,
+        manifest_path=manifest_path,
+    )
     recent_logs = (
         "\n".join(escape(line) for line in status.recent_log_lines)
         if status.recent_log_lines
@@ -320,6 +536,26 @@ def _render_ui_html(
       flex-wrap: wrap;
     }}
     form {{ margin: 0; }}
+    .stack-form {{
+      display: grid;
+      gap: 10px;
+    }}
+    .stack-form label {{
+      display: grid;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }}
+    input, select {{
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px 12px;
+      font-size: 0.96rem;
+      font-family: inherit;
+      background: white;
+      color: var(--ink);
+    }}
     button {{
       border: 0;
       border-radius: 999px;
@@ -338,6 +574,10 @@ def _render_ui_html(
     }}
     .run-now {{
       background: var(--accent);
+      color: white;
+    }}
+    .save {{
+      background: #6f4e37;
       color: white;
     }}
     button[disabled] {{
@@ -382,6 +622,42 @@ def _render_ui_html(
       word-break: break-word;
       max-height: 320px;
       overflow: auto;
+    }}
+    .profiles {{
+      margin-top: 28px;
+      display: grid;
+      gap: 18px;
+    }}
+    .profile-card {{
+      background: var(--soft);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 18px;
+    }}
+    .profile-header {{
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: baseline;
+      margin-bottom: 14px;
+    }}
+    .profile-header h2 {{
+      margin: 0;
+      font-size: 1.1rem;
+    }}
+    .badge {{
+      display: inline-block;
+      border-radius: 999px;
+      padding: 4px 10px;
+      font-size: 0.82rem;
+      background: #e9dfcf;
+      color: var(--ink);
+    }}
+    .profile-actions {{
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 12px;
     }}
     .row {{
       display: flex;
@@ -504,6 +780,7 @@ def _render_ui_html(
         <h2>Recent Log Output</h2>
         <div class="logbox">{recent_logs}</div>
       </div>
+      {profile_section}
     </div>
   </div>
 </body>
@@ -529,6 +806,140 @@ def _status_summary(status: AutomationStatus) -> str:
     return "Automation is disabled."
 
 
+def _render_profile_controls_section(
+    *,
+    profiles: tuple[ProfileControlStatus, ...],
+    manifest_path: Path,
+) -> str:
+    if not profiles:
+        return (
+            '<div class="panel" style="margin-top: 28px;">'
+            "<h2>Profile Controls</h2>"
+            f"<p>No profile matrix found at <code>{escape(str(manifest_path))}</code>. "
+            "Create one with <code>multi-profile-setup</code> to manage multiple risk profiles here.</p>"
+            "</div>"
+        )
+
+    cards = []
+    for profile in profiles:
+        recent_logs = (
+            "\n".join(escape(line) for line in profile.recent_log_lines)
+            if profile.recent_log_lines
+            else "No profile log output yet."
+        )
+        cards.append(
+            f"""
+      <div class="profile-card">
+        <div class="profile-header">
+          <h2>{escape(profile.profile_name)}</h2>
+          <span class="badge">{escape(profile.risk_profile)}</span>
+        </div>
+        <p>Run state: <strong>{escape(profile.run_phase)}</strong> | Last result: <strong>{escape(profile.last_result or "unknown")}</strong></p>
+        <p>Last message: <strong>{escape(profile.last_message or "none")}</strong></p>
+        <div class="meta">
+          <div class="row">
+            <div class="label">Env File</div>
+            <code>{escape(str(profile.env_path))}</code>
+          </div>
+          <div class="row">
+            <div class="label">Portfolio State</div>
+            <code>{escape(str(profile.state_path))}</code>
+          </div>
+          <div class="row">
+            <div class="label">UI Run Status</div>
+            <code>{escape(str(profile.status_path))}</code>
+          </div>
+          <div class="row">
+            <div class="label">Log File</div>
+            <code>{escape(str(profile.log_path))}</code>
+          </div>
+          <div class="row">
+            <div class="label">Alpaca Key</div>
+            <strong>{escape(profile.api_key_preview or "missing")}</strong>
+          </div>
+          <div class="row">
+            <div class="label">Secret Key</div>
+            <strong>{'present' if profile.has_secret_key else 'missing'}</strong>
+          </div>
+        </div>
+        <form class="stack-form" method="post" action="/profile-save">
+          <input type="hidden" name="profile_key" value="{escape(profile.key)}">
+          <label>Profile Name
+            <input type="text" name="profile_name" value="{escape(profile.profile_name)}">
+          </label>
+          <label>Risk Profile
+            <select name="risk_profile">
+              {_render_risk_profile_options(profile.risk_profile)}
+            </select>
+          </label>
+          <label>Alpaca API Key
+            <input type="text" name="alpaca_api_key" value="{escape(_read_env_value(profile.env_path, 'ALPACA_API_KEY'))}">
+          </label>
+          <label>Alpaca Secret Key
+            <input type="password" name="alpaca_secret_key" value="{escape(_read_env_value(profile.env_path, 'ALPACA_SECRET_KEY'))}">
+          </label>
+          <label>Performance Baseline
+            <input type="text" name="performance_baseline" value="{escape(profile.performance_baseline)}">
+          </label>
+          <div class="profile-actions">
+            <button class="save" type="submit">Save Settings</button>
+          </div>
+        </form>
+        <div class="profile-actions">
+          <form method="post" action="/profile-run">
+            <input type="hidden" name="profile_key" value="{escape(profile.key)}">
+            <button class="run-now" type="submit" {'disabled aria-disabled="true"' if profile.run_phase == 'running' else ''}>Run {escape(profile.profile_name)}</button>
+          </form>
+        </div>
+        <div class="logbox">{recent_logs}</div>
+      </div>
+"""
+        )
+
+    return f"""
+      <div class="panel" style="margin-top: 28px;">
+        <h2>Multi-Profile Controls</h2>
+        <p>Manage risk profile settings and Alpaca credentials for multiple paper accounts from one page.</p>
+        <p>Manifest: <code>{escape(str(manifest_path))}</code></p>
+        <div class="profile-actions">
+          <form method="post" action="/profiles-run-all">
+            <button class="run-now" type="submit">Run All Profiles</button>
+          </form>
+        </div>
+        <div class="profiles">
+          {''.join(cards)}
+        </div>
+      </div>
+"""
+
+
+def _render_risk_profile_options(current_value: str) -> str:
+    options = []
+    for value in ("conservative", "balanced", "aggressive"):
+        selected = " selected" if value == current_value else ""
+        options.append(
+            f'<option value="{value}"{selected}>{value.title()}</option>'
+        )
+    return "".join(options)
+
+
+def _find_profile_status(
+    *,
+    key: str,
+    manifest_path: Path,
+    profile_status_dir: Path,
+    profile_log_dir: Path,
+) -> ProfileControlStatus | None:
+    for profile in load_profile_control_statuses(
+        manifest_path=manifest_path,
+        profile_status_dir=profile_status_dir,
+        profile_log_dir=profile_log_dir,
+    ):
+        if profile.key == key:
+            return profile
+    return None
+
+
 def _last_updated_label(status: AutomationStatus) -> str:
     candidate = status.last_finished_at or status.last_started_at
     if candidate is None:
@@ -544,3 +955,70 @@ def _last_updated_label(status: AutomationStatus) -> str:
 
 def _utc_now_label() -> str:
     return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+
+def _mask_key(value: str) -> str:
+    if not value:
+        return ""
+    if len(value) <= 8:
+        return "*" * len(value)
+    return f"{value[:4]}...{value[-4:]}"
+
+
+def _read_env_value(env_path: Path, key: str) -> str:
+    if not env_path.exists():
+        return ""
+    return load_env_file(env_path).get(key, "")
+
+
+def _render_profile_run_shell_command(
+    *,
+    repo_root: Path,
+    python_path: Path,
+    env_path: Path,
+    status_path: Path,
+    log_path: Path,
+    profile_name: str,
+) -> str:
+    quoted_repo = shlex.quote(str(repo_root))
+    quoted_python = shlex.quote(str(python_path))
+    quoted_env = shlex.quote(str(env_path))
+    quoted_status = shlex.quote(str(status_path))
+    quoted_log = shlex.quote(str(log_path))
+    quoted_profile = shlex.quote(profile_name)
+    return f"""
+set -euo pipefail
+status_file={quoted_status}
+log_file={quoted_log}
+profile_name={quoted_profile}
+write_status() {{
+  cat > "$status_file" <<EOF
+run_phase=$1
+last_result=$2
+last_message=$3
+last_started_at=$4
+last_finished_at=$5
+last_exit_code=$6
+EOF
+}}
+mkdir -p "$(dirname "$status_file")" "$(dirname "$log_file")"
+run_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+write_status running pending "$profile_name run starting" "$run_started_at" "" ""
+exec >> "$log_file" 2>&1
+echo "=== $(date -u +%Y-%m-%dT%H:%M:%SZ) profile run start: $profile_name ==="
+cd {quoted_repo}
+set -a
+source {quoted_env}
+set +a
+if PYTHONPATH=src {quoted_python} -m ai_investing.cli automation-run --manual; then
+  run_finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  write_status idle success "$profile_name run completed successfully" "$run_started_at" "$run_finished_at" "0"
+  echo "=== $(date -u +%Y-%m-%dT%H:%M:%SZ) profile run end: $profile_name ==="
+else
+  code=$?
+  run_finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  write_status failed failed "$profile_name run failed" "$run_started_at" "$run_finished_at" "$code"
+  echo "=== $(date -u +%Y-%m-%dT%H:%M:%SZ) profile run failed: $profile_name (exit $code) ==="
+  exit $code
+fi
+"""

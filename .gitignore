@@ -7,4 +7,7 @@ logs/
 automation/*.cron
 automation/*.enabled
 automation/*.status
+automation/profiles/*.status
+profiles/*.env
+profiles/profile_matrix.json
 scripts/run_paper_trade.sh

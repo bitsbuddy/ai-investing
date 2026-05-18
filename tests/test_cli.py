@@ -13,6 +13,7 @@ from ai_investing.cli import (
     _resolve_research_validation_date,
     _run_automation_setup_command,
     _run_automation_trade_command,
+    _run_multi_profile_setup_command,
     _run_paper_setup_command,
 )
 from ai_investing.config import BrokerConfig, RuntimeConfig
@@ -31,10 +32,13 @@ class _FakeClockClient:
 
 def _runtime_config(**overrides) -> RuntimeConfig:
     values = {
+        "profile_name": "Balanced",
+        "risk_profile": "balanced",
         "enable_live": False,
         "enable_official_news": True,
         "enable_llm_news": False,
         "state_path": Path(".ai_investing_state.json"),
+        "performance_baseline": None,
         "default_feed": "iex",
         "risk_on_universe": ("SPY",),
         "defensive_universe": ("TLT",),
@@ -158,9 +162,45 @@ class CLITests(unittest.TestCase):
             self.assertIn("/bin/zsh", cron_contents)
             self.assertIn("40 9 * * 1-5", cron_contents)
             self.assertEqual(control_contents, "enabled=1\n")
-            self.assertIn("run_phase=idle", status_contents)
-            self.assertIn("last_result=never", status_contents)
-            self.assertIn("crontab", output.getvalue())
+        self.assertIn("run_phase=idle", status_contents)
+        self.assertIn("last_result=never", status_contents)
+        self.assertIn("crontab", output.getvalue())
+
+    def test_multi_profile_setup_writes_distinct_env_files_and_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            runtime_config = _runtime_config(research_snapshot_path=None)
+            broker_config = BrokerConfig(
+                api_key="paper-key",
+                secret_key="paper-secret",
+                paper=True,
+                trading_base_url="https://paper-api.alpaca.markets",
+                market_data_base_url="https://data.alpaca.markets",
+            )
+            args = argparse.Namespace(
+                directory=str(root / "profiles"),
+                manifest=str(root / "profiles" / "profile_matrix.json"),
+                research_snapshot=None,
+                sec_user_agent=None,
+                force=False,
+            )
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                _run_multi_profile_setup_command(broker_config, runtime_config, args)
+
+            manifest_text = (root / "profiles" / "profile_matrix.json").read_text()
+            conservative_text = (root / "profiles" / "conservative.paper.env").read_text()
+            aggressive_text = (root / "profiles" / "aggressive.paper.env").read_text()
+            self.assertIn("conservative", manifest_text)
+            self.assertIn("aggressive", manifest_text)
+            self.assertIn("AI_INVESTING_RISK_PROFILE=conservative", conservative_text)
+            self.assertIn("AI_INVESTING_RISK_PROFILE=aggressive", aggressive_text)
+            self.assertIn(
+                "AI_INVESTING_STATE_PATH=.ai_investing_conservative_state.json",
+                conservative_text,
+            )
+            self.assertIn("different Alpaca paper key", output.getvalue())
 
     def test_automation_trade_manual_run_falls_back_to_preview_when_market_is_closed(self) -> None:
         runtime_config = _runtime_config()

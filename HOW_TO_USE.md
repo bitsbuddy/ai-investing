@@ -37,6 +37,7 @@ ALPACA_API_KEY=your_key
 ALPACA_SECRET_KEY=your_secret
 ALPACA_PAPER=true
 AI_INVESTING_ENABLE_LIVE=0
+AI_INVESTING_RISK_PROFILE=balanced
 ```
 
 If you want the research overlay, also set:
@@ -87,11 +88,14 @@ AI_INVESTING_SSL_NO_VERIFY=1
 
 ## 3. Main Ways To Use It
 
-There are 7 main commands:
+There are 10 main commands:
 
 - `paper-setup`: create a safe paper-trading env file
+- `multi-profile-setup`: create conservative / balanced / aggressive env files plus a manifest
 - `automation-setup`: generate a weekday runner script and cron template
 - `automation-ui`: open a local start/stop control panel for automation
+- `multi-profile-run`: run all profiles from one manifest
+- `multi-profile-report`: compare account performance across all profiles
 - `backtest`: test the strategy on history
 - `research`: score assets using the research snapshot
 - `signal`: generate the current target portfolio
@@ -233,7 +237,42 @@ If you want to test the automation without sending orders first:
 PYTHONPATH=src python3 -m ai_investing.cli automation-setup --preview-only --force
 ```
 
-## 10. Start And Stop Automation From A UI
+## 10. Run Multiple Risk Profiles In Parallel
+
+Create the profile matrix:
+
+```bash
+PYTHONPATH=src python3 -m ai_investing.cli multi-profile-setup
+```
+
+That writes:
+
+- `profiles/conservative.paper.env`
+- `profiles/balanced.paper.env`
+- `profiles/aggressive.paper.env`
+- `profiles/profile_matrix.json`
+
+Replace the Alpaca paper credentials in each env file with different paper accounts if you want a clean profile-vs-profile comparison.
+
+Preview all profiles at once:
+
+```bash
+PYTHONPATH=src python3 -m ai_investing.cli multi-profile-run --manifest profiles/profile_matrix.json
+```
+
+Submit across all profiles:
+
+```bash
+PYTHONPATH=src python3 -m ai_investing.cli multi-profile-run --manifest profiles/profile_matrix.json --submit
+```
+
+Compare which profile is currently leading:
+
+```bash
+PYTHONPATH=src python3 -m ai_investing.cli multi-profile-report --manifest profiles/profile_matrix.json
+```
+
+## 11. Start And Stop Automation From A UI
 
 Run the local control panel:
 
@@ -260,7 +299,16 @@ The UI gives you:
 
 The scheduled runner checks the control file before each run, so stopping automation in the UI prevents the next scheduled trade from executing.
 
-## 11. Move To Live Trading
+If `profiles/profile_matrix.json` exists, the UI also shows one card per profile where you can:
+
+- edit the displayed profile name
+- switch between `conservative`, `balanced`, and `aggressive`
+- paste that profile's Alpaca paper key and secret
+- set a baseline account value for performance comparison
+- run one profile immediately
+- run all profiles immediately in parallel
+
+## 12. Move To Live Trading
 
 Only do this after paper trading for a while.
 
@@ -277,7 +325,7 @@ Then submit:
 PYTHONPATH=src python3 -m ai_investing.cli trade --submit
 ```
 
-## 12. Typical Daily Workflow
+## 13. Typical Daily Workflow
 
 Use this order:
 
@@ -289,7 +337,7 @@ Use this order:
 6. Review the output.
 7. If it looks correct, run `trade --submit`.
 
-## 13. Optional: Broaden The Universe
+## 14. Optional: Broaden The Universe
 
 Default risk-on universe:
 
@@ -305,18 +353,19 @@ AI_INVESTING_RISK_ON=SPY,QQQ,MSFT,NVDA,AMZN
 
 If you add equities, put company metrics for them in the research snapshot.
 
-## 14. Important Safety Notes
+## 15. Important Safety Notes
 
 - Start with paper trading.
 - Start with small size.
 - Do not assume backtest results will match live performance.
 - Automation should stay on paper until you have reviewed logs and fills for a while.
 - The UI only enables or disables scheduled runs. It does not replace the scheduler itself.
+- Multi-profile comparison only makes sense if each profile has its own paper account or clearly defined performance baseline.
 - Research snapshots must be current. Future-dated or stale snapshots are rejected.
 - Official news is live-only context. It is not included in backtests, by design.
 - This system is designed for low-frequency rebalancing, not intraday trading or HFT.
 
-## 15. Useful Commands
+## 16. Useful Commands
 
 Show CLI help:
 
@@ -342,7 +391,13 @@ Show automation UI help:
 PYTHONPATH=src python3 -m ai_investing.cli automation-ui --help
 ```
 
-## 16. Recommended Starting Point
+Show multi-profile help:
+
+```bash
+PYTHONPATH=src python3 -m ai_investing.cli multi-profile-run --help
+```
+
+## 17. Recommended Starting Point
 
 If you want the shortest path:
 

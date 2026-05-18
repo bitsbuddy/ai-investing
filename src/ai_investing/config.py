@@ -1,33 +1,49 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 
-def _float_env(name: str, default: float) -> float:
-    raw = os.getenv(name)
+def _raw_env(name: str, env: Mapping[str, str] | None = None) -> str | None:
+    if env is not None:
+        return env.get(name)
+    return os.getenv(name)
+
+
+def _float_env(name: str, default: float, env: Mapping[str, str] | None = None) -> float:
+    raw = _raw_env(name, env)
     if raw is None or raw.strip() == "":
         return default
     return float(raw.strip())
 
 
-def _int_env(name: str, default: int) -> int:
-    raw = os.getenv(name)
+def _optional_float_env(name: str, env: Mapping[str, str] | None = None) -> float | None:
+    raw = _raw_env(name, env)
+    if raw is None or raw.strip() == "":
+        return None
+    return float(raw.strip())
+
+
+def _int_env(name: str, default: int, env: Mapping[str, str] | None = None) -> int:
+    raw = _raw_env(name, env)
     if raw is None or raw.strip() == "":
         return default
     return int(raw.strip())
 
 
-def _bool_env(name: str, default: bool) -> bool:
-    raw = os.getenv(name)
+def _bool_env(name: str, default: bool, env: Mapping[str, str] | None = None) -> bool:
+    raw = _raw_env(name, env)
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _csv_env(name: str, default: list[str]) -> list[str]:
-    raw = os.getenv(name)
+def _csv_env(
+    name: str, default: list[str], env: Mapping[str, str] | None = None
+) -> list[str]:
+    raw = _raw_env(name, env)
     if not raw:
         return default
     values = [value.strip().upper() for value in raw.split(",")]
@@ -45,10 +61,13 @@ class BrokerConfig:
 
 @dataclass(frozen=True)
 class RuntimeConfig:
+    profile_name: str
+    risk_profile: str
     enable_live: bool
     enable_official_news: bool
     enable_llm_news: bool
     state_path: Path
+    performance_baseline: float | None
     default_feed: str
     risk_on_universe: tuple[str, ...]
     defensive_universe: tuple[str, ...]
@@ -66,10 +85,10 @@ class RuntimeConfig:
     max_price_drift_pct: float
 
 
-def load_broker_config() -> BrokerConfig:
-    api_key = os.getenv("ALPACA_API_KEY", "").strip()
-    secret_key = os.getenv("ALPACA_SECRET_KEY", "").strip()
-    paper = _bool_env("ALPACA_PAPER", True)
+def load_broker_config(env: Mapping[str, str] | None = None) -> BrokerConfig:
+    api_key = (_raw_env("ALPACA_API_KEY", env) or "").strip()
+    secret_key = (_raw_env("ALPACA_SECRET_KEY", env) or "").strip()
+    paper = _bool_env("ALPACA_PAPER", True, env)
     trading_base_url = (
         "https://paper-api.alpaca.markets"
         if paper
@@ -85,53 +104,71 @@ def load_broker_config() -> BrokerConfig:
     )
 
 
-def load_runtime_config() -> RuntimeConfig:
-    research_snapshot_raw = os.getenv("AI_INVESTING_RESEARCH_SNAPSHOT_PATH", "").strip()
+def load_runtime_config(env: Mapping[str, str] | None = None) -> RuntimeConfig:
+    research_snapshot_raw = (
+        _raw_env("AI_INVESTING_RESEARCH_SNAPSHOT_PATH", env) or ""
+    ).strip()
     llm_news_api_key = (
-        os.getenv("AI_INVESTING_OPENAI_API_KEY", os.getenv("OPENAI_API_KEY", "")).strip()
+        (_raw_env("AI_INVESTING_OPENAI_API_KEY", env) or _raw_env("OPENAI_API_KEY", env) or "").strip()
+    )
+    risk_profile = ((_raw_env("AI_INVESTING_RISK_PROFILE", env) or "balanced").strip().lower() or "balanced")
+    profile_name = (
+        (_raw_env("AI_INVESTING_PROFILE_NAME", env) or "").strip()
+        or risk_profile.replace("-", " ").title()
     )
     return RuntimeConfig(
-        enable_live=_bool_env("AI_INVESTING_ENABLE_LIVE", False),
-        enable_official_news=_bool_env("AI_INVESTING_ENABLE_OFFICIAL_NEWS", True),
-        enable_llm_news=_bool_env("AI_INVESTING_ENABLE_LLM_NEWS", False),
+        profile_name=profile_name,
+        risk_profile=risk_profile,
+        enable_live=_bool_env("AI_INVESTING_ENABLE_LIVE", False, env),
+        enable_official_news=_bool_env("AI_INVESTING_ENABLE_OFFICIAL_NEWS", True, env),
+        enable_llm_news=_bool_env("AI_INVESTING_ENABLE_LLM_NEWS", False, env),
         state_path=Path(
-            os.getenv("AI_INVESTING_STATE_PATH", ".ai_investing_state.json")
+            (_raw_env("AI_INVESTING_STATE_PATH", env) or ".ai_investing_state.json")
         ),
-        default_feed=os.getenv("AI_INVESTING_DEFAULT_FEED", "iex").strip() or "iex",
+        performance_baseline=_optional_float_env("AI_INVESTING_PERFORMANCE_BASELINE", env),
+        default_feed=((_raw_env("AI_INVESTING_DEFAULT_FEED", env) or "iex").strip() or "iex"),
         risk_on_universe=tuple(
-            _csv_env("AI_INVESTING_RISK_ON", ["SPY", "QQQ", "IWM", "EFA", "EEM"])
+            _csv_env(
+                "AI_INVESTING_RISK_ON",
+                ["SPY", "QQQ", "IWM", "EFA", "EEM"],
+                env,
+            )
         ),
         defensive_universe=tuple(
-            _csv_env("AI_INVESTING_DEFENSIVE", ["TLT", "IEF", "GLD", "SHY"])
+            _csv_env(
+                "AI_INVESTING_DEFENSIVE",
+                ["TLT", "IEF", "GLD", "SHY"],
+                env,
+            )
         ),
         research_snapshot_path=(
             Path(research_snapshot_raw) if research_snapshot_raw else None
         ),
-        research_max_age_days=_int_env("AI_INVESTING_RESEARCH_MAX_AGE_DAYS", 45),
+        research_max_age_days=_int_env("AI_INVESTING_RESEARCH_MAX_AGE_DAYS", 45, env),
         official_news_lookback_days=_int_env(
-            "AI_INVESTING_OFFICIAL_NEWS_LOOKBACK_DAYS", 14
+            "AI_INVESTING_OFFICIAL_NEWS_LOOKBACK_DAYS", 14, env
         ),
-        require_official_news=_bool_env("AI_INVESTING_REQUIRE_OFFICIAL_NEWS", False),
-        require_llm_news=_bool_env("AI_INVESTING_REQUIRE_LLM_NEWS", False),
+        require_official_news=_bool_env("AI_INVESTING_REQUIRE_OFFICIAL_NEWS", False, env),
+        require_llm_news=_bool_env("AI_INVESTING_REQUIRE_LLM_NEWS", False, env),
         sec_user_agent=(
-            os.getenv(
+            (_raw_env(
                 "AI_INVESTING_SEC_USER_AGENT",
-                "AI-Investing research@example.com",
-            ).strip()
+                env,
+            ) or "AI-Investing research@example.com").strip()
             or "AI-Investing research@example.com"
         ),
         llm_news_api_key=llm_news_api_key,
         llm_news_model=(
-            os.getenv("AI_INVESTING_LLM_NEWS_MODEL", "gpt-5-mini").strip()
+            ((_raw_env("AI_INVESTING_LLM_NEWS_MODEL", env) or "gpt-5-mini").strip())
             or "gpt-5-mini"
         ),
         llm_news_base_url=(
-            os.getenv("AI_INVESTING_OPENAI_BASE_URL", "https://api.openai.com/v1").strip()
+            ((_raw_env("AI_INVESTING_OPENAI_BASE_URL", env) or "https://api.openai.com/v1").strip())
             or "https://api.openai.com/v1"
         ),
-        llm_news_max_items=_int_env("AI_INVESTING_LLM_NEWS_MAX_ITEMS", 8),
-        llm_news_max_chars=_int_env("AI_INVESTING_LLM_NEWS_MAX_CHARS", 6000),
-        max_price_drift_pct=_float_env("AI_INVESTING_MAX_PRICE_DRIFT_PCT", 0.02),
+        llm_news_max_items=_int_env("AI_INVESTING_LLM_NEWS_MAX_ITEMS", 8, env),
+        llm_news_max_chars=_int_env("AI_INVESTING_LLM_NEWS_MAX_CHARS", 6000, env),
+        max_price_drift_pct=_float_env("AI_INVESTING_MAX_PRICE_DRIFT_PCT", 0.02, env),
     )
 
 

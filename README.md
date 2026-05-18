@@ -20,6 +20,7 @@ IBKR remains a stronger choice if you need broader global market access or more 
 - Uses walk-forward parameter selection instead of full-sample parameter fitting.
 - Optionally overlays company, index, ETF, and official-source news context onto the signal engine.
 - Generates target portfolio weights for the current session.
+- Supports multiple risk-profile variants, each with its own Alpaca account and state file.
 - Rebalances an Alpaca account with guardrails:
   - paper trading by default
   - live trading blocked unless explicitly enabled
@@ -47,6 +48,23 @@ Base quant logic:
 5. Keep a cash buffer and cap single-name exposure.
 
 This remains deliberately simple on the execution side. Alpaca's own automated-trading disclosures warn against over-optimization and explicitly note that its platform is not intended for high-frequency trading.
+
+## Risk Profiles
+
+The system now supports three built-in risk appetites through `AI_INVESTING_RISK_PROFILE`:
+
+- `conservative`
+- `balanced`
+- `aggressive`
+
+They differ in base cash buffer, position concentration, rebalance cadence, and tactical aggressiveness. The walk-forward optimizer still runs inside each profile, but each profile starts from a different base parameter set.
+
+This is intended for profile-level experimentation such as:
+
+- separate Alpaca paper accounts
+- separate state files
+- separate performance baselines
+- side-by-side comparison of conservative vs balanced vs aggressive behavior
 
 ## Comprehensive Research Layer
 
@@ -178,6 +196,41 @@ PYTHONPATH=src python3 -m ai_investing.cli trade --research-snapshot examples/re
 PYTHONPATH=src python3 -m ai_investing.cli trade --submit --research-snapshot examples/research_snapshot.example.json
 ```
 
+### Multi-Profile Setup
+
+If you want to run multiple risk appetites in parallel with different Alpaca keys, generate a profile matrix:
+
+```bash
+PYTHONPATH=src python3 -m ai_investing.cli multi-profile-setup
+```
+
+This writes:
+
+- `profiles/conservative.paper.env`
+- `profiles/balanced.paper.env`
+- `profiles/aggressive.paper.env`
+- `profiles/profile_matrix.json`
+
+Each env file gets:
+
+- its own `AI_INVESTING_RISK_PROFILE`
+- its own `AI_INVESTING_STATE_PATH`
+- a default `AI_INVESTING_PERFORMANCE_BASELINE=100000`
+
+Replace the Alpaca key and secret in each env file with a different paper account if you want a clean live paper comparison.
+
+Run all profiles:
+
+```bash
+PYTHONPATH=src python3 -m ai_investing.cli multi-profile-run --manifest profiles/profile_matrix.json
+```
+
+Compare which profile is currently performing best:
+
+```bash
+PYTHONPATH=src python3 -m ai_investing.cli multi-profile-report --manifest profiles/profile_matrix.json
+```
+
 ### One-Command Automation Setup
 
 If you want unattended paper trading, generate a runner script and cron template:
@@ -210,6 +263,17 @@ PYTHONPATH=src python3 -m ai_investing.cli automation-ui
 Then open `http://127.0.0.1:8787`.
 
 The UI toggles the automation control file used by the scheduled runner, lets you force an immediate manual run, and shows high-level progress for the latest run, current runner state, and recent log output so you can see what the automation is doing without tailing files manually.
+
+If `profiles/profile_matrix.json` exists, the same UI also exposes multi-profile controls:
+
+- edit `AI_INVESTING_PROFILE_NAME`
+- edit `AI_INVESTING_RISK_PROFILE`
+- edit each profile's Alpaca paper key and secret
+- edit each profile's performance baseline
+- run one profile now
+- run all profiles now in parallel
+
+Those profile controls update the env files in `profiles/*.paper.env` directly and write per-profile UI run logs under `logs/profiles/`.
 
 ### Backtest
 

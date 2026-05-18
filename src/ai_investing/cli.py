@@ -21,6 +21,13 @@ from .config import (
 from .execution import execute_rebalance
 from .models import OfficialNewsContext, ResearchSnapshot, ResearchWeights, StrategyParameters
 from .news import build_official_news_context, summarize_official_news
+from .profiles import (
+    default_profile_matrix_entries,
+    load_env_file,
+    load_profile_matrix,
+    strategy_parameters_for_risk_profile,
+    write_profile_matrix,
+)
 from .research import ResearchOverlay, load_research_snapshot
 from .strategy import ETFMomentumStrategy, align_history
 
@@ -37,6 +44,16 @@ def build_parser() -> argparse.ArgumentParser:
     paper_setup.add_argument("--research-snapshot", default=None)
     paper_setup.add_argument("--sec-user-agent", default=None)
     paper_setup.add_argument("--force", action="store_true")
+
+    multi_profile_setup = subparsers.add_parser(
+        "multi-profile-setup",
+        help="Create conservative, balanced, and aggressive paper-trading env files plus a matrix manifest.",
+    )
+    multi_profile_setup.add_argument("--directory", default="profiles")
+    multi_profile_setup.add_argument("--manifest", default="profiles/profile_matrix.json")
+    multi_profile_setup.add_argument("--research-snapshot", default=None)
+    multi_profile_setup.add_argument("--sec-user-agent", default=None)
+    multi_profile_setup.add_argument("--force", action="store_true")
 
     automation_setup = subparsers.add_parser(
         "automation-setup",
@@ -73,6 +90,9 @@ def build_parser() -> argparse.ArgumentParser:
     automation_ui.add_argument(
         "--status-file", default="automation/paper_trade.status"
     )
+    automation_ui.add_argument(
+        "--manifest", default="profiles/profile_matrix.json"
+    )
 
     automation_run = subparsers.add_parser(
         "automation-run",
@@ -90,6 +110,28 @@ def build_parser() -> argparse.ArgumentParser:
     automation_run.add_argument("--require-llm-news", action="store_true")
     automation_run.add_argument("--manual", action="store_true")
     automation_run.add_argument("--preview-only", action="store_true")
+
+    multi_profile_run = subparsers.add_parser(
+        "multi-profile-run",
+        help="Run preview or submission across multiple profile env files.",
+    )
+    multi_profile_run.add_argument("--manifest", default="profiles/profile_matrix.json")
+    multi_profile_run.add_argument("--lookback-days", type=int, default=900)
+    multi_profile_run.add_argument("--feed", default=None)
+    multi_profile_run.add_argument("--training-window-bars", type=int, default=756)
+    multi_profile_run.add_argument("--submit", action="store_true")
+    multi_profile_run.add_argument("--force", action="store_true")
+    multi_profile_run.add_argument("--no-official-news", action="store_true")
+    multi_profile_run.add_argument("--no-llm-news", action="store_true")
+    multi_profile_run.add_argument("--official-news-lookback-days", type=int, default=None)
+    multi_profile_run.add_argument("--require-official-news", action="store_true")
+    multi_profile_run.add_argument("--require-llm-news", action="store_true")
+
+    multi_profile_report = subparsers.add_parser(
+        "multi-profile-report",
+        help="Compare current paper-account performance across multiple profiles.",
+    )
+    multi_profile_report.add_argument("--manifest", default="profiles/profile_matrix.json")
 
     backtest = subparsers.add_parser("backtest", help="Run a historical backtest.")
     backtest.add_argument("--start", type=_parse_date, required=True)
@@ -146,11 +188,20 @@ def main() -> None:
     if args.command == "paper-setup":
         _run_paper_setup_command(broker_config, runtime_config, args)
         return
+    if args.command == "multi-profile-setup":
+        _run_multi_profile_setup_command(broker_config, runtime_config, args)
+        return
     if args.command == "automation-setup":
         _run_automation_setup_command(runtime_config, args)
         return
     if args.command == "automation-ui":
         _run_automation_ui_command(args)
+        return
+    if args.command == "multi-profile-run":
+        _run_multi_profile_run_command(args)
+        return
+    if args.command == "multi-profile-report":
+        _run_multi_profile_report_command(args)
         return
 
     if args.command == "research":
@@ -198,7 +249,7 @@ def _run_backtest_command(
         feed=args.feed or runtime_config.default_feed,
     )
 
-    base_params = StrategyParameters()
+    base_params = strategy_parameters_for_risk_profile(runtime_config.risk_profile)
     if args.no_optimize:
         strategy = ETFMomentumStrategy(
             risk_on_universe=runtime_config.risk_on_universe,
@@ -293,6 +344,61 @@ def _run_paper_setup_command(
         )
 
 
+def _run_multi_profile_setup_command(
+    broker_config,
+    runtime_config,
+    args: argparse.Namespace,
+) -> None:
+    profile_dir = Path(args.directory)
+    manifest_path = Path(args.manifest)
+    entries = default_profile_matrix_entries(profile_dir)
+    for path in [manifest_path, *(entry.env_file for entry in entries)]:
+        if path.exists() and not args.force:
+            raise FileExistsError(
+                f"{path} already exists. Re-run with --force to overwrite it."
+            )
+
+    research_snapshot = _resolve_paper_setup_snapshot_path(runtime_config, args)
+    sec_user_agent = _resolve_paper_setup_sec_user_agent(runtime_config, args)
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+
+    for entry in entries:
+        env_payload = _build_paper_env_payload(
+            broker_config=broker_config,
+            runtime_config=runtime_config,
+            research_snapshot_path=research_snapshot,
+            sec_user_agent=sec_user_agent,
+        )
+        env_payload.update(
+            {
+                "ALPACA_API_KEY": f"your-{entry.name}-paper-key",
+                "ALPACA_SECRET_KEY": f"your-{entry.name}-paper-secret",
+                "AI_INVESTING_PROFILE_NAME": entry.name.title(),
+                "AI_INVESTING_RISK_PROFILE": entry.name,
+                "AI_INVESTING_STATE_PATH": f".ai_investing_{entry.name}_state.json",
+                "AI_INVESTING_PERFORMANCE_BASELINE": "100000",
+            }
+        )
+        entry.env_file.parent.mkdir(parents=True, exist_ok=True)
+        entry.env_file.write_text(_render_env_file(env_payload))
+
+    write_profile_matrix(manifest_path, entries)
+
+    print(f"Wrote profile matrix: {manifest_path}")
+    for entry in entries:
+        print(f"- env: {entry.env_file} ({entry.name})")
+    print("")
+    print("Next Steps")
+    print("- Put a different Alpaca paper key and secret into each env file.")
+    print(
+        f"- Run previews across all profiles: PYTHONPATH=src python3 -m ai_investing.cli multi-profile-run --manifest {manifest_path}"
+    )
+    print(
+        f"- Compare current performance: PYTHONPATH=src python3 -m ai_investing.cli multi-profile-report --manifest {manifest_path}"
+    )
+
+
 def _run_automation_setup_command(
     runtime_config,
     args: argparse.Namespace,
@@ -368,12 +474,15 @@ def _run_automation_setup_command(
 def _run_automation_ui_command(args: argparse.Namespace) -> None:
     host = args.host
     port = args.port
+    repo_root = Path.cwd().resolve()
+    python_path = Path(sys.executable).resolve()
     env_path = Path(args.env_file).resolve()
     script_path = Path(args.script_file).resolve()
     control_path = Path(args.control_file).resolve()
     cron_path = Path(args.cron_file).resolve()
     log_path = Path(args.log_file).resolve()
     status_path = Path(args.status_file).resolve()
+    manifest_path = Path(args.manifest).resolve()
     if not (0 <= port <= 65535):
         raise ValueError("--port must be between 0 and 65535.")
 
@@ -382,13 +491,104 @@ def _run_automation_ui_command(args: argparse.Namespace) -> None:
     serve_automation_ui(
         host=host,
         port=port,
+        repo_root=repo_root,
+        python_path=python_path,
         control_path=control_path,
         script_path=script_path,
         env_path=env_path,
         cron_path=cron_path,
         log_path=log_path,
         state_path=status_path,
+        manifest_path=manifest_path,
+        profile_status_dir=repo_root / "automation" / "profiles",
+        profile_log_dir=repo_root / "logs" / "profiles",
     )
+
+
+def _run_multi_profile_run_command(args: argparse.Namespace) -> None:
+    entries = load_profile_matrix(Path(args.manifest))
+    failures: list[str] = []
+
+    for entry in entries:
+        print("")
+        env_values = load_env_file(entry.env_file)
+        broker_config = load_broker_config(env_values)
+        runtime_config = load_runtime_config(env_values)
+        print(
+            f"=== {runtime_config.profile_name} ({runtime_config.risk_profile}) | {entry.env_file} ==="
+        )
+        try:
+            require_broker_credentials(broker_config)
+            client = AlpacaClient(broker_config)
+            profile_args = argparse.Namespace(
+                lookback_days=args.lookback_days,
+                feed=args.feed,
+                research_snapshot=None,
+                training_window_bars=args.training_window_bars,
+                submit=args.submit,
+                force=args.force,
+                no_official_news=args.no_official_news,
+                no_llm_news=args.no_llm_news,
+                official_news_lookback_days=args.official_news_lookback_days,
+                require_official_news=args.require_official_news,
+                require_llm_news=args.require_llm_news,
+                manual=True,
+                preview_only=False,
+            )
+            if args.submit:
+                _run_automation_trade_command(
+                    client, broker_config.paper, runtime_config, profile_args
+                )
+            else:
+                _run_trade_command(client, broker_config.paper, runtime_config, profile_args)
+            account = client.get_account()
+            baseline = runtime_config.performance_baseline or account.equity
+            total_return = (
+                (account.equity / baseline) - 1.0 if baseline > 0 else 0.0
+            )
+            print(
+                f"Profile account equity: ${account.equity:,.2f} | baseline ${baseline:,.2f} | return {total_return:.2%}"
+            )
+        except Exception as exc:
+            failures.append(f"{runtime_config.profile_name}: {exc}")
+            print(f"Profile failed: {exc}")
+
+    if failures:
+        raise RuntimeError("One or more profiles failed:\n- " + "\n- ".join(failures))
+
+
+def _run_multi_profile_report_command(args: argparse.Namespace) -> None:
+    entries = load_profile_matrix(Path(args.manifest))
+    rows: list[dict[str, object]] = []
+
+    for entry in entries:
+        env_values = load_env_file(entry.env_file)
+        broker_config = load_broker_config(env_values)
+        runtime_config = load_runtime_config(env_values)
+        require_broker_credentials(broker_config)
+        client = AlpacaClient(broker_config)
+        account = client.get_account()
+        baseline = runtime_config.performance_baseline or account.equity
+        total_return = (account.equity / baseline) - 1.0 if baseline > 0 else 0.0
+        rows.append(
+            {
+                "profile_name": runtime_config.profile_name,
+                "risk_profile": runtime_config.risk_profile,
+                "equity": account.equity,
+                "baseline": baseline,
+                "total_return": total_return,
+                "state_path": runtime_config.state_path,
+            }
+        )
+
+    rows.sort(key=lambda row: row["total_return"], reverse=True)
+    print("Profile Performance")
+    for index, row in enumerate(rows, start=1):
+        print(
+            f"{index}. {row['profile_name']} ({row['risk_profile']}): "
+            f"equity=${row['equity']:,.2f} | baseline=${row['baseline']:,.2f} | return={row['total_return']:.2%}"
+        )
+        print(f"   state: {row['state_path']}")
 
 
 def _run_signal_command(
@@ -612,11 +812,12 @@ def _compute_latest_signal(
             _resolve_research_validation_date(history.dates[signal_index]),
             max_age_days=runtime_config.research_max_age_days,
         )
+    base_params = strategy_parameters_for_risk_profile(runtime_config.risk_profile)
     best_result = select_walk_forward_parameters(
         history,
         risk_on_universe=runtime_config.risk_on_universe,
         defensive_universe=runtime_config.defensive_universe,
-        base_params=StrategyParameters(),
+        base_params=base_params,
         signal_index=signal_index,
         training_window=training_window_bars,
     )
@@ -820,6 +1021,13 @@ def _build_paper_env_payload(
         "ALPACA_PAPER": "true",
         "AI_INVESTING_ENABLE_LIVE": "0",
         "AI_INVESTING_STATE_PATH": ".ai_investing_paper_state.json",
+        "AI_INVESTING_PROFILE_NAME": runtime_config.profile_name,
+        "AI_INVESTING_RISK_PROFILE": runtime_config.risk_profile,
+        "AI_INVESTING_PERFORMANCE_BASELINE": (
+            ""
+            if runtime_config.performance_baseline is None
+            else str(runtime_config.performance_baseline)
+        ),
         "AI_INVESTING_DEFAULT_FEED": runtime_config.default_feed,
         "AI_INVESTING_RISK_ON": ",".join(runtime_config.risk_on_universe),
         "AI_INVESTING_DEFENSIVE": ",".join(runtime_config.defensive_universe),

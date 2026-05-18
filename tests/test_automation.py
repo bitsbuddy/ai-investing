@@ -7,9 +7,13 @@ from unittest.mock import patch
 
 from ai_investing.automation import (
     load_automation_status,
+    load_profile_control_statuses,
+    save_profile_settings,
+    trigger_profile_manual_run,
     trigger_manual_run,
     write_automation_enabled,
 )
+from ai_investing.profiles import write_profile_matrix, ProfileMatrixEntry
 
 
 class AutomationTests(unittest.TestCase):
@@ -77,6 +81,97 @@ class AutomationTests(unittest.TestCase):
             self.assertIn("run_phase=queued", state_contents)
             self.assertIn("last_result=pending", state_contents)
             self.assertIn("last_message=Manual run requested from UI", state_contents)
+
+    def test_load_profile_control_statuses_reads_manifest_and_env_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            profile_dir = root / "profiles"
+            manifest_path = profile_dir / "profile_matrix.json"
+            env_path = profile_dir / "balanced.paper.env"
+            env_path.parent.mkdir(parents=True, exist_ok=True)
+            env_path.write_text(
+                "AI_INVESTING_PROFILE_NAME=Balanced\n"
+                "AI_INVESTING_RISK_PROFILE=balanced\n"
+                "ALPACA_API_KEY=testkey1234\n"
+                "ALPACA_SECRET_KEY=testsecret5678\n"
+                "AI_INVESTING_STATE_PATH=.ai_investing_balanced_state.json\n"
+                "AI_INVESTING_PERFORMANCE_BASELINE=100000\n"
+            )
+            write_profile_matrix(
+                manifest_path,
+                [ProfileMatrixEntry(name="balanced", env_file=env_path)],
+            )
+            status_dir = root / "automation" / "profiles"
+            log_dir = root / "logs" / "profiles"
+            status_dir.mkdir(parents=True, exist_ok=True)
+            log_dir.mkdir(parents=True, exist_ok=True)
+            (status_dir / "balanced.status").write_text(
+                "run_phase=idle\nlast_result=success\nlast_message=done\n"
+            )
+            (log_dir / "balanced.log").write_text("line 1\nline 2\n")
+
+            statuses = load_profile_control_statuses(
+                manifest_path=manifest_path,
+                profile_status_dir=status_dir,
+                profile_log_dir=log_dir,
+            )
+
+            self.assertEqual(len(statuses), 1)
+            self.assertEqual(statuses[0].profile_name, "Balanced")
+            self.assertEqual(statuses[0].risk_profile, "balanced")
+            self.assertTrue(statuses[0].has_api_key)
+            self.assertTrue(statuses[0].has_secret_key)
+            self.assertEqual(statuses[0].recent_log_lines, ("line 1", "line 2"))
+
+    def test_save_profile_settings_updates_env_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env_path = Path(tmpdir) / "balanced.paper.env"
+            env_path.write_text(
+                "AI_INVESTING_PROFILE_NAME=Balanced\n"
+                "AI_INVESTING_RISK_PROFILE=balanced\n"
+                "ALPACA_API_KEY=oldkey\n"
+                "ALPACA_SECRET_KEY=oldsecret\n"
+                "AI_INVESTING_PERFORMANCE_BASELINE=100000\n"
+            )
+
+            save_profile_settings(
+                env_path=env_path,
+                profile_name="Aggressive Lab",
+                risk_profile="aggressive",
+                alpaca_api_key="newkey",
+                alpaca_secret_key="newsecret",
+                performance_baseline="125000",
+            )
+
+            contents = env_path.read_text()
+            self.assertIn("AI_INVESTING_PROFILE_NAME=\"Aggressive Lab\"", contents)
+            self.assertIn("AI_INVESTING_RISK_PROFILE=aggressive", contents)
+            self.assertIn("ALPACA_API_KEY=newkey", contents)
+            self.assertIn("ALPACA_SECRET_KEY=newsecret", contents)
+            self.assertIn("AI_INVESTING_PERFORMANCE_BASELINE=125000", contents)
+
+    def test_trigger_profile_manual_run_queues_and_spawns(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            env_path = root / "balanced.paper.env"
+            env_path.write_text("ALPACA_API_KEY=test\nALPACA_SECRET_KEY=test\n")
+            status_path = root / "balanced.status"
+            log_path = root / "balanced.log"
+
+            with patch("ai_investing.automation.subprocess.Popen") as popen:
+                ok, message = trigger_profile_manual_run(
+                    repo_root=root,
+                    python_path=Path("/usr/bin/python3"),
+                    env_path=env_path,
+                    status_path=status_path,
+                    log_path=log_path,
+                    profile_name="Balanced",
+                )
+
+            self.assertTrue(ok)
+            self.assertEqual(message, "Balanced run started.")
+            popen.assert_called_once()
+            self.assertIn("run_phase=queued", status_path.read_text())
 
 
 if __name__ == "__main__":
