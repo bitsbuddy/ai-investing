@@ -1,9 +1,11 @@
 .env.local
 .env.paper
 .ai_investing_state.json
+.ai_investing_*_state.json
 __pycache__/
 *.pyc
 logs/
+automation/*.plist
 automation/*.cron
 automation/*.enabled
 automation/*.status
