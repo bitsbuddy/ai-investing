@@ -223,7 +223,7 @@ This writes:
 - `scripts/run_paper_trade.sh`
 - `automation/paper_trade.cron`
 
-By default it schedules a weekday run at `09:40` in your machine's local timezone and submits paper orders automatically.
+By default it schedules weekday runs at `09:40`, `12:30`, and `15:45` in your machine's local timezone and submits paper orders automatically.
 
 Install the cron schedule:
 

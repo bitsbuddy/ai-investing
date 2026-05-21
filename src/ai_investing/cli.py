@@ -71,6 +71,11 @@ def build_parser() -> argparse.ArgumentParser:
     automation_setup.add_argument("--cron-file", default="automation/paper_trade.cron")
     automation_setup.add_argument("--status-file", default="automation/paper_trade.status")
     automation_setup.add_argument("--manifest", default="profiles/profile_matrix.json")
+    automation_setup.add_argument(
+        "--times",
+        default="09:40,12:30,15:45",
+        help="Comma-separated local-time schedule in HH:MM format, weekdays only.",
+    )
     automation_setup.add_argument("--hour", type=int, default=9)
     automation_setup.add_argument("--minute", type=int, default=40)
     automation_setup.add_argument("--preview-only", action="store_true")
@@ -447,10 +452,7 @@ def _run_automation_setup_command(
         raise FileNotFoundError(
             f"{env_path} does not exist. Create it first with `paper-setup` or manually."
         )
-    if not (0 <= args.hour <= 23):
-        raise ValueError("--hour must be between 0 and 23.")
-    if not (0 <= args.minute <= 59):
-        raise ValueError("--minute must be between 0 and 59.")
+    schedule_times = _resolve_automation_schedule_times(args)
     for path in (script_path, cron_path):
         if path.exists() and not args.force:
             raise FileExistsError(
@@ -481,8 +483,7 @@ def _run_automation_setup_command(
     cron_path.write_text(
         _render_cron_file(
             script_path=script_path,
-            hour=args.hour,
-            minute=args.minute,
+            schedule_times=schedule_times,
         )
     )
 
@@ -495,7 +496,9 @@ def _run_automation_setup_command(
     print(f"- env file: {env_path}")
     print(f"- control file: {control_path}")
     print(f"- status file: {status_path}")
-    print(f"- schedule: weekdays at {args.hour:02d}:{args.minute:02d} (system local time)")
+    print(
+        f"- schedule: weekdays at {', '.join(_format_schedule_time(hour, minute) for hour, minute in schedule_times)} (system local time)"
+    )
     print("- log file: logs/paper-trade.log")
     print(
         f"- profile mode: {'multi-profile matrix' if manifest_path.exists() else 'single env file'}"
@@ -1361,14 +1364,67 @@ echo "=== $(date -u +%Y-%m-%dT%H:%M:%SZ) $run_kind run end ==="
 def _render_cron_file(
     *,
     script_path: Path,
-    hour: int,
-    minute: int,
+    schedule_times: list[tuple[int, int]],
 ) -> str:
+    entries = "".join(
+        f"{minute} {hour} * * 1-5 /bin/zsh \"{script_path}\"\n"
+        for hour, minute in schedule_times
+    )
     return (
         "# Load this schedule with: crontab automation/paper_trade.cron\n"
         "# Weekdays only. Time uses the machine's local timezone.\n"
-        f"{minute} {hour} * * 1-5 /bin/zsh \"{script_path}\"\n"
+        f"{entries}"
     )
+
+
+def _resolve_automation_schedule_times(
+    args: argparse.Namespace,
+) -> list[tuple[int, int]]:
+    raw_times = (getattr(args, "times", "") or "").strip()
+    if raw_times:
+        return _parse_schedule_times(raw_times)
+    return [_validate_schedule_time(args.hour, args.minute)]
+
+
+def _parse_schedule_times(raw_times: str) -> list[tuple[int, int]]:
+    schedule_times: list[tuple[int, int]] = []
+    seen: set[tuple[int, int]] = set()
+    for raw_item in raw_times.split(","):
+        item = raw_item.strip()
+        if not item:
+            continue
+        if ":" not in item:
+            raise ValueError(
+                f"Invalid schedule time {item!r}. Expected HH:MM format."
+            )
+        hour_text, minute_text = item.split(":", 1)
+        try:
+            hour = int(hour_text)
+            minute = int(minute_text)
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid schedule time {item!r}. Expected HH:MM format."
+            ) from exc
+        schedule_time = _validate_schedule_time(hour, minute)
+        if schedule_time in seen:
+            continue
+        schedule_times.append(schedule_time)
+        seen.add(schedule_time)
+    if not schedule_times:
+        raise ValueError("At least one automation schedule time is required.")
+    return sorted(schedule_times)
+
+
+def _validate_schedule_time(hour: int, minute: int) -> tuple[int, int]:
+    if not (0 <= hour <= 23):
+        raise ValueError("Automation schedule hour must be between 0 and 23.")
+    if not (0 <= minute <= 59):
+        raise ValueError("Automation schedule minute must be between 0 and 59.")
+    return hour, minute
+
+
+def _format_schedule_time(hour: int, minute: int) -> str:
+    return f"{hour:02d}:{minute:02d}"
 
 
 if __name__ == "__main__":

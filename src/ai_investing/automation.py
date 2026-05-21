@@ -138,11 +138,14 @@ def trigger_manual_run(*, script_path: Path, state_path: Path) -> tuple[bool, st
 def read_cron_schedule(cron_path: Path) -> str | None:
     if not cron_path.exists():
         return None
+    entries: list[str] = []
     for line in cron_path.read_text().splitlines():
         stripped = line.strip()
         if stripped and not stripped.startswith("#"):
-            return stripped
-    return None
+            entries.append(stripped)
+    if not entries:
+        return None
+    return "\n".join(entries)
 
 
 def read_recent_log_lines(log_path: Path, *, limit: int = 12) -> tuple[str, ...]:

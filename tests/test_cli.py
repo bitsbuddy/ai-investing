@@ -171,6 +171,7 @@ class CLITests(unittest.TestCase):
                 cron_file=str(cron_path),
                 status_file=str(status_path),
                 manifest=str(root / "profiles" / "profile_matrix.json"),
+                times="",
                 hour=9,
                 minute=40,
                 preview_only=False,
@@ -202,6 +203,42 @@ class CLITests(unittest.TestCase):
         self.assertIn("last_result=never", status_contents)
         self.assertIn("crontab", output.getvalue())
 
+    def test_automation_setup_can_write_multiple_intraday_schedule_times(self) -> None:
+        import os
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            env_path = root / ".env.paper"
+            env_path.write_text("ALPACA_PAPER=true\nAI_INVESTING_ENABLE_LIVE=0\n")
+            script_path = root / "scripts" / "run_paper_trade.sh"
+            cron_path = root / "automation" / "paper_trade.cron"
+            status_path = root / "automation" / "paper_trade.status"
+            runtime_config = _runtime_config(research_snapshot_path=None)
+            args = argparse.Namespace(
+                env_file=str(env_path),
+                script_file=str(script_path),
+                cron_file=str(cron_path),
+                status_file=str(status_path),
+                manifest=str(root / "profiles" / "profile_matrix.json"),
+                times="09:40,12:30,15:45",
+                hour=9,
+                minute=40,
+                preview_only=False,
+                force=False,
+            )
+
+            cwd_before = Path.cwd()
+            try:
+                os.chdir(root)
+                _run_automation_setup_command(runtime_config, args)
+            finally:
+                os.chdir(cwd_before)
+
+            cron_contents = cron_path.read_text()
+            self.assertIn('40 9 * * 1-5 /bin/zsh "', cron_contents)
+            self.assertIn('30 12 * * 1-5 /bin/zsh "', cron_contents)
+            self.assertIn('45 15 * * 1-5 /bin/zsh "', cron_contents)
+
     def test_automation_setup_prefers_profile_matrix_when_manifest_exists(self) -> None:
         import os
 
@@ -222,6 +259,7 @@ class CLITests(unittest.TestCase):
                 cron_file=str(cron_path),
                 status_file=str(status_path),
                 manifest=str(manifest_path),
+                times="",
                 hour=9,
                 minute=40,
                 preview_only=False,

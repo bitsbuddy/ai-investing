@@ -259,7 +259,7 @@ Then install the cron schedule:
 crontab automation/paper_trade.cron
 ```
 
-The default schedule is weekdays at `09:40` in the machine's local timezone, and the log file is `logs/paper-trade.log`.
+The default schedule is weekdays at `09:40`, `12:30`, and `15:45` in the machine's local timezone, and the log file is `logs/paper-trade.log`.
 
 ### Simple UI For Start / Stop
 
