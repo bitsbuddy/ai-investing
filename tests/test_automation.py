@@ -8,6 +8,8 @@ from unittest.mock import patch
 from ai_investing.automation import (
     load_automation_status,
     load_profile_control_statuses,
+    load_trade_rationale_reports,
+    read_trade_rationale_report,
     save_profile_settings,
     trigger_profile_manual_run,
     trigger_manual_run,
@@ -172,6 +174,40 @@ class AutomationTests(unittest.TestCase):
             self.assertEqual(message, "Balanced run started.")
             popen.assert_called_once()
             self.assertIn("run_phase=queued", status_path.read_text())
+
+    def test_load_trade_rationale_reports_parses_and_sorts_reports(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            reports_dir = Path(tmpdir) / "logs" / "trade-rationales"
+            reports_dir.mkdir(parents=True, exist_ok=True)
+            older = reports_dir / "20260521T100000Z-balanced-preview.md"
+            newer = reports_dir / "20260521T110000Z-aggressive-submit.md"
+            older.write_text(
+                "# Trade Rationale\n\n"
+                "- Generated At: 2026-05-21T10:00:00Z\n"
+                "- Profile: Balanced\n"
+                "- Risk Profile: balanced\n"
+                "- Run Mode: preview\n"
+                "- Run Status: preview\n"
+                "- Signal As Of: 2026-05-20\n"
+            )
+            newer.write_text(
+                "# Trade Rationale\n\n"
+                "- Generated At: 2026-05-21T11:00:00Z\n"
+                "- Profile: Aggressive\n"
+                "- Risk Profile: aggressive\n"
+                "- Run Mode: submit\n"
+                "- Run Status: submitted\n"
+                "- Signal As Of: 2026-05-21\n"
+                "\n## Target Portfolio\n- SPY: 20.00%\n"
+            )
+
+            reports = load_trade_rationale_reports(reports_dir)
+
+            self.assertEqual(len(reports), 2)
+            self.assertEqual(reports[0].filename, newer.name)
+            self.assertEqual(reports[0].profile_name, "Aggressive")
+            self.assertEqual(reports[1].profile_name, "Balanced")
+            self.assertIn("## Target Portfolio", read_trade_rationale_report(reports[0].path))
 
 
 if __name__ == "__main__":

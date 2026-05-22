@@ -19,7 +19,7 @@ from .config import (
     load_runtime_config,
     require_broker_credentials,
 )
-from .execution import RuntimeState, execute_rebalance, save_state
+from .execution import ExecutionResult, RuntimeState, execute_rebalance, save_state
 from .models import (
     OfficialNewsContext,
     RebalanceAction,
@@ -542,6 +542,7 @@ def _run_automation_ui_command(args: argparse.Namespace) -> None:
         manifest_path=manifest_path,
         profile_status_dir=repo_root / "automation" / "profiles",
         profile_log_dir=repo_root / "logs" / "profiles",
+        trade_rationale_dir=repo_root / "logs" / "trade-rationales",
     )
 
 
@@ -689,18 +690,33 @@ def _run_trade_command(
     latest_prices = {
         symbol: closes[signal_index] for symbol, closes in history.closes.items()
     }
-    result = execute_rebalance(
-        client=client,
-        signal=signal,
-        state_path=runtime_config.state_path,
-        latest_prices=latest_prices,
-        allow_live=runtime_config.enable_live,
-        is_paper=is_paper,
-        submit=args.submit,
-        force=args.force,
-        live_price_feed=args.feed or runtime_config.default_feed,
-        max_price_drift_pct=runtime_config.max_price_drift_pct,
-    )
+    result: ExecutionResult | None = None
+    try:
+        result = execute_rebalance(
+            client=client,
+            signal=signal,
+            state_path=runtime_config.state_path,
+            latest_prices=latest_prices,
+            allow_live=runtime_config.enable_live,
+            is_paper=is_paper,
+            submit=args.submit,
+            force=args.force,
+            live_price_feed=args.feed or runtime_config.default_feed,
+            max_price_drift_pct=runtime_config.max_price_drift_pct,
+        )
+    except Exception as exc:
+        report_path = _maybe_write_trade_rationale_report(
+            runtime_config=runtime_config,
+            params=params,
+            signal=signal,
+            result=None,
+            submit=args.submit,
+            clock_timestamp=clock.timestamp,
+            execution_error=str(exc),
+        )
+        if report_path is not None:
+            print(f"Trade rationale report: {report_path}")
+        raise
     actions = result.actions
     responses = result.responses
     state = result.state
@@ -755,6 +771,19 @@ def _run_trade_command(
         print("")
         print(f"Submitted {len(responses)} orders.")
         print(f"High-water mark: ${state.high_water_mark:.2f}")
+
+    report_path = _maybe_write_trade_rationale_report(
+        runtime_config=runtime_config,
+        params=params,
+        signal=signal,
+        result=result,
+        submit=args.submit,
+        clock_timestamp=clock.timestamp,
+        execution_error=None,
+    )
+    if report_path is not None:
+        print("")
+        print(f"Trade rationale report: {report_path}")
 
 
 def _run_reset_account_command(
@@ -1059,6 +1088,231 @@ def _format_assessment_line(assessment) -> str:
     )
 
 
+def _maybe_write_trade_rationale_report(
+    *,
+    runtime_config,
+    params: StrategyParameters,
+    signal,
+    result: ExecutionResult | None,
+    submit: bool,
+    clock_timestamp: str,
+    execution_error: str | None,
+) -> Path | None:
+    try:
+        return _write_trade_rationale_report(
+            runtime_config=runtime_config,
+            params=params,
+            signal=signal,
+            result=result,
+            submit=submit,
+            clock_timestamp=clock_timestamp,
+            execution_error=execution_error,
+        )
+    except Exception as exc:
+        print(f"Warning: unable to write trade rationale report: {exc}")
+        return None
+
+
+def _write_trade_rationale_report(
+    *,
+    runtime_config,
+    params: StrategyParameters,
+    signal,
+    result: ExecutionResult | None,
+    submit: bool,
+    clock_timestamp: str,
+    execution_error: str | None,
+) -> Path:
+    reports_dir = Path("logs/trade-rationales")
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    generated_at = _utc_now_label()
+    mode = "submit" if submit else "preview"
+    status = _trade_report_status(result=result, submit=submit, execution_error=execution_error)
+    filename = (
+        f"{generated_at.replace(':', '').replace('-', '')}"
+        f"-{_slugify_profile_name(runtime_config.profile_name)}-{mode}.md"
+    )
+    report_path = reports_dir / filename
+    report_path.write_text(
+        _render_trade_rationale_report(
+            runtime_config=runtime_config,
+            params=params,
+            signal=signal,
+            result=result,
+            generated_at=generated_at,
+            mode=mode,
+            status=status,
+            clock_timestamp=clock_timestamp,
+            execution_error=execution_error,
+        )
+    )
+    return report_path
+
+
+def _render_trade_rationale_report(
+    *,
+    runtime_config,
+    params: StrategyParameters,
+    signal,
+    result: ExecutionResult | None,
+    generated_at: str,
+    mode: str,
+    status: str,
+    clock_timestamp: str,
+    execution_error: str | None,
+) -> str:
+    cash_target = max(0.0, 1.0 - sum(signal.weights.values()))
+    diagnostics = signal.diagnostics or {}
+    selected_count = int(diagnostics.get("selected_count", len(signal.weights)))
+    selected_etf_count = int(diagnostics.get("selected_etf_count", 0))
+    selected_equity_count = int(diagnostics.get("selected_equity_count", 0))
+    decision_summary = _build_trade_decision_summary(
+        regime=signal.regime,
+        selected_count=selected_count,
+        selected_etf_count=selected_etf_count,
+        selected_equity_count=selected_equity_count,
+        cash_target=cash_target,
+    )
+    report_lines = [
+        "# Trade Rationale",
+        "",
+        f"- Generated At: {generated_at}",
+        f"- Profile: {runtime_config.profile_name}",
+        f"- Risk Profile: {runtime_config.risk_profile}",
+        f"- Run Mode: {mode}",
+        f"- Run Status: {status}",
+        f"- Market Clock: {clock_timestamp}",
+        f"- Signal As Of: {signal.as_of.isoformat()}",
+        "",
+        "## Decision Summary",
+        f"- {decision_summary}",
+        f"- Parameters: `{params}`",
+        "",
+        "## Target Portfolio",
+    ]
+    report_lines.extend(
+        f"- {symbol}: {weight:.2%}"
+        for symbol, weight in sorted(signal.weights.items())
+    )
+    report_lines.append(f"- CASH: {cash_target:.2%}")
+
+    if signal.official_news is not None:
+        report_lines.extend(_render_report_news_section(signal.official_news))
+
+    selected_research_lines = _selected_research_lines(signal)
+    if selected_research_lines:
+        report_lines.extend(["", "## Selected Research"])
+        report_lines.extend(selected_research_lines)
+
+    if result is not None and result.submitted_actions:
+        report_lines.extend(["", "## Submitted Basket"])
+        report_lines.extend(_format_action_line(action) for action in result.submitted_actions)
+    elif result is not None and result.actions:
+        report_lines.extend(["", "## Planned Actions"])
+        report_lines.extend(_format_action_line(action) for action in result.actions)
+
+    if (
+        result is not None
+        and result.actions
+        and _actions_differ(result.actions, result.submitted_actions)
+    ):
+        report_lines.extend(["", "## Remaining Actions"])
+        report_lines.extend(_format_action_line(action) for action in result.actions)
+
+    if result is not None and result.skipped_messages:
+        report_lines.extend(["", "## Skipped Actions"])
+        report_lines.extend(f"- {message}" for message in result.skipped_messages)
+
+    if execution_error is not None:
+        report_lines.extend(["", "## Execution Error", f"- {execution_error}"])
+
+    report_lines.append("")
+    return "\n".join(report_lines)
+
+
+def _build_trade_decision_summary(
+    *,
+    regime: str,
+    selected_count: int,
+    selected_etf_count: int,
+    selected_equity_count: int,
+    cash_target: float,
+) -> str:
+    if regime == "risk_on":
+        return (
+            f"The model stayed risk-on with {selected_count} qualifying positions "
+            f"({selected_etf_count} ETFs and {selected_equity_count} equities) "
+            f"and a target cash buffer of {cash_target:.2%}."
+        )
+    return (
+        f"The model moved defensive because it did not find enough qualifying "
+        f"risk-on positions. Target cash is {cash_target:.2%}."
+    )
+
+
+def _render_report_news_section(official_news: OfficialNewsContext) -> list[str]:
+    lines = ["", "## Official News Context"]
+    if official_news.risk_on_score is not None:
+        lines.append(f"- Risk assets: {official_news.risk_on_score:.2f}")
+    if official_news.duration_score is not None:
+        lines.append(f"- Duration: {official_news.duration_score:.2f}")
+    if official_news.cash_score is not None:
+        lines.append(f"- Cash / short duration: {official_news.cash_score:.2f}")
+    if official_news.gold_score is not None:
+        lines.append(f"- Gold: {official_news.gold_score:.2f}")
+    for source_name, source_status in sorted(official_news.source_status.items()):
+        lines.append(f"- {source_name}: {source_status}")
+    for headline in summarize_official_news(official_news, limit=4):
+        lines.append(f"- Headline: {headline}")
+    return lines
+
+
+def _selected_research_lines(signal) -> list[str]:
+    if not signal.assessments:
+        return []
+    selected_symbols = set(signal.weights)
+    selected = [
+        signal.assessments[symbol]
+        for symbol in selected_symbols
+        if symbol in signal.assessments
+    ]
+    return [
+        _format_assessment_line(assessment)
+        for assessment in sorted(selected, key=lambda item: item.total_score, reverse=True)
+    ]
+
+
+def _trade_report_status(
+    *,
+    result: ExecutionResult | None,
+    submit: bool,
+    execution_error: str | None,
+) -> str:
+    if execution_error is not None:
+        return "failed"
+    if not submit:
+        return "preview"
+    if result is None:
+        return "unknown"
+    if result.responses:
+        return "submitted"
+    if result.submitted_actions:
+        return "submitted"
+    if result.actions:
+        return "planned"
+    return "no_rebalance"
+
+
+def _slugify_profile_name(value: str) -> str:
+    cleaned = "".join(
+        character.lower() if character.isalnum() else "-"
+        for character in value.strip()
+    )
+    while "--" in cleaned:
+        cleaned = cleaned.replace("--", "-")
+    return cleaned.strip("-") or "profile"
+
+
 def _actions_differ(
     left: list[RebalanceAction], right: list[RebalanceAction]
 ) -> bool:
@@ -1077,6 +1331,14 @@ def _action_key(action: RebalanceAction) -> tuple[str, str, float, float | None,
         None if action.qty is None else round(action.qty, 6),
         action.reason,
     )
+
+
+def _format_action_line(action: RebalanceAction) -> str:
+    if action.qty is None:
+        details = f"${action.notional:.2f}"
+    else:
+        details = f"{action.qty:.6f} shares"
+    return f"- {action.side.upper()} {action.symbol}: {details} ({action.reason})"
 
 
 def _build_research_overlay(
@@ -1176,6 +1438,10 @@ def _parse_date(value: str) -> date:
 
 def _today_utc() -> date:
     return datetime.now(UTC).date()
+
+
+def _utc_now_label() -> str:
+    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _build_paper_env_payload(

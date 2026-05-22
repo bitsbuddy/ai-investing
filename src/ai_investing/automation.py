@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 import shlex
 import subprocess
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, quote, urlsplit
 from zoneinfo import ZoneInfo
 
 from .config import load_runtime_config
@@ -54,6 +54,18 @@ class ProfileControlStatus:
     last_finished_at: str | None
     last_exit_code: str | None
     recent_log_lines: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class TradeRationaleReport:
+    filename: str
+    path: Path
+    generated_at: str
+    profile_name: str
+    risk_profile: str
+    run_mode: str
+    run_status: str
+    signal_as_of: str
 
 
 def read_automation_enabled(control_path: Path) -> bool:
@@ -231,6 +243,30 @@ def load_profile_control_statuses(
     return tuple(statuses)
 
 
+def load_trade_rationale_reports(
+    reports_dir: Path,
+    *,
+    limit: int = 100,
+) -> tuple[TradeRationaleReport, ...]:
+    if not reports_dir.exists():
+        return ()
+    reports: list[TradeRationaleReport] = []
+    for path in sorted(reports_dir.glob("*.md"), reverse=True):
+        try:
+            reports.append(_parse_trade_rationale_report(path))
+        except OSError:
+            continue
+        if len(reports) >= limit:
+            break
+    return tuple(reports)
+
+
+def read_trade_rationale_report(path: Path) -> str:
+    if not path.exists():
+        return ""
+    return path.read_text()
+
+
 def save_profile_settings(
     *,
     env_path: Path,
@@ -308,41 +344,73 @@ def serve_automation_ui(
     manifest_path: Path,
     profile_status_dir: Path,
     profile_log_dir: Path,
+    trade_rationale_dir: Path,
 ) -> None:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
-            if self.path != "/":
+            parsed = urlsplit(self.path)
+            if parsed.path == "/":
+                status = load_automation_status(
+                    control_path=control_path,
+                    script_path=script_path,
+                    env_path=env_path,
+                    cron_path=cron_path,
+                    log_path=log_path,
+                    state_path=state_path,
+                )
+                profiles = load_profile_control_statuses(
+                    manifest_path=manifest_path,
+                    profile_status_dir=profile_status_dir,
+                    profile_log_dir=profile_log_dir,
+                )
+                body = _render_ui_html(
+                    status=status,
+                    profiles=profiles,
+                    control_path=control_path,
+                    script_path=script_path,
+                    env_path=env_path,
+                    cron_path=cron_path,
+                    log_path=log_path,
+                    state_path=state_path,
+                    manifest_path=manifest_path,
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if parsed.path == "/reports":
+                reports = load_trade_rationale_reports(trade_rationale_dir)
+                selected_name = parse_qs(parsed.query, keep_blank_values=True).get(
+                    "report", [""]
+                )[0]
+                selected_report = _find_trade_rationale_report(
+                    reports_dir=trade_rationale_dir,
+                    filename=selected_name,
+                    reports=reports,
+                )
+                if selected_report is None and reports:
+                    selected_report = reports[0]
+                body = _render_reports_html(
+                    reports=reports,
+                    selected_report=selected_report,
+                    selected_content=(
+                        read_trade_rationale_report(selected_report.path)
+                        if selected_report is not None
+                        else ""
+                    ),
+                    reports_dir=trade_rationale_dir,
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            else:
                 self.send_error(404)
                 return
-            status = load_automation_status(
-                control_path=control_path,
-                script_path=script_path,
-                env_path=env_path,
-                cron_path=cron_path,
-                log_path=log_path,
-                state_path=state_path,
-            )
-            profiles = load_profile_control_statuses(
-                manifest_path=manifest_path,
-                profile_status_dir=profile_status_dir,
-                profile_log_dir=profile_log_dir,
-            )
-            body = _render_ui_html(
-                status=status,
-                profiles=profiles,
-                control_path=control_path,
-                script_path=script_path,
-                env_path=env_path,
-                cron_path=cron_path,
-                log_path=log_path,
-                state_path=state_path,
-                manifest_path=manifest_path,
-            ).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
 
         def do_POST(self) -> None:  # noqa: N802
             fields = self._read_form_fields()
@@ -870,6 +938,7 @@ def _render_ui_html(
         <form method="post" action="/run-now">
           <button class="run-now" type="submit" {run_now_disabled}>Run Now</button>
         </form>
+        <a class="run-now" href="/reports" style="text-decoration:none; display:inline-flex; align-items:center;">Trade History</a>
       </div>
 
       <div class="meta">
@@ -928,6 +997,156 @@ def _render_ui_html(
         <div class="logbox">{recent_logs}</div>
       </div>
       {profile_section}
+    </div>
+  </div>
+</body>
+</html>
+"""
+
+
+def _render_reports_html(
+    *,
+    reports: tuple[TradeRationaleReport, ...],
+    selected_report: TradeRationaleReport | None,
+    selected_content: str,
+    reports_dir: Path,
+) -> str:
+    report_items = []
+    for report in reports:
+        active = " style=\"background:#e9dfcf;\"" if selected_report and report.filename == selected_report.filename else ""
+        report_items.append(
+            f"""
+            <a href="/reports?report={quote(report.filename, safe='')}" class="report-link"{active}>
+              <strong>{escape(report.profile_name)}</strong>
+              <span>{escape(report.generated_at)} | {escape(report.run_mode)} | {escape(report.run_status)}</span>
+              <span>Signal: {escape(report.signal_as_of)} | Risk: {escape(report.risk_profile)}</span>
+            </a>
+"""
+        )
+    content = escape(selected_content) if selected_content else "No report selected yet."
+    selected_label = selected_report.filename if selected_report is not None else "No reports yet"
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Trade Rationale History</title>
+  <meta http-equiv="refresh" content="15">
+  <style>
+    :root {{
+      --bg: #f5f1e8;
+      --panel: #fffdf7;
+      --ink: #1f2a2c;
+      --muted: #5c6b70;
+      --line: #d8cfbe;
+      --accent: #184e77;
+      --soft: #f3ede0;
+      --shadow: 0 20px 50px rgba(31, 42, 44, 0.12);
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      font-family: Georgia, "Times New Roman", serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(24, 78, 119, 0.08), transparent 30%),
+        linear-gradient(160deg, #f7f2e7 0%, #ebe2d0 100%);
+      min-height: 100vh;
+    }}
+    .shell {{ max-width: 1360px; margin: 36px auto; padding: 20px; }}
+    .card {{
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      box-shadow: var(--shadow);
+      padding: 24px;
+    }}
+    .toolbar {{
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: flex-start;
+      flex-wrap: wrap;
+    }}
+    .grid {{
+      margin-top: 22px;
+      display: grid;
+      grid-template-columns: 360px 1fr;
+      gap: 18px;
+    }}
+    .list-panel, .content-panel {{
+      background: var(--soft);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 18px;
+    }}
+    .report-list {{
+      display: grid;
+      gap: 10px;
+      max-height: 70vh;
+      overflow: auto;
+    }}
+    .report-link {{
+      display: grid;
+      gap: 4px;
+      text-decoration: none;
+      color: var(--ink);
+      padding: 12px 14px;
+      border-radius: 14px;
+      background: #faf6ee;
+      border: 1px solid var(--line);
+    }}
+    .report-link span {{ color: var(--muted); font-size: 0.88rem; }}
+    .report-content {{
+      margin-top: 12px;
+      padding: 14px;
+      border-radius: 14px;
+      background: #faf6ee;
+      border: 1px solid var(--line);
+      font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+      font-size: 0.86rem;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 72vh;
+      overflow: auto;
+    }}
+    .back-link {{
+      display: inline-flex;
+      align-items: center;
+      text-decoration: none;
+      color: white;
+      background: var(--accent);
+      border-radius: 999px;
+      padding: 12px 18px;
+    }}
+    @media (max-width: 900px) {{
+      .grid {{ grid-template-columns: 1fr; }}
+    }}
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="card">
+      <div class="toolbar">
+        <div>
+          <h1 style="margin:0 0 8px;">Trade Rationale History</h1>
+          <p style="margin:0;color:var(--muted);">Every trade run writes a rationale file under <code>{escape(str(reports_dir))}</code>.</p>
+        </div>
+        <a class="back-link" href="/">Back to Automation</a>
+      </div>
+      <div class="grid">
+        <div class="list-panel">
+          <h2 style="margin:0 0 12px;">Reports ({len(reports)})</h2>
+          <div class="report-list">
+            {''.join(report_items) if report_items else '<p style="color:var(--muted);margin:0;">No trade rationale reports yet.</p>'}
+          </div>
+        </div>
+        <div class="content-panel">
+          <h2 style="margin:0 0 6px;">{escape(selected_label)}</h2>
+          <div class="report-content">{content}</div>
+        </div>
+      </div>
     </div>
   </div>
 </body>
@@ -1194,6 +1413,54 @@ def _read_env_value(env_path: Path, key: str) -> str:
     if not env_path.exists():
         return ""
     return load_env_file(env_path).get(key, "")
+
+
+def _parse_trade_rationale_report(path: Path) -> TradeRationaleReport:
+    values = {
+        "Generated At": "",
+        "Profile": "",
+        "Risk Profile": "",
+        "Run Mode": "",
+        "Run Status": "",
+        "Signal As Of": "",
+    }
+    for line in path.read_text().splitlines():
+        if not line.startswith("- ") or ":" not in line:
+            continue
+        key, value = line[2:].split(":", 1)
+        if key in values:
+            values[key] = value.strip()
+    return TradeRationaleReport(
+        filename=path.name,
+        path=path,
+        generated_at=values["Generated At"],
+        profile_name=values["Profile"],
+        risk_profile=values["Risk Profile"],
+        run_mode=values["Run Mode"],
+        run_status=values["Run Status"],
+        signal_as_of=values["Signal As Of"],
+    )
+
+
+def _find_trade_rationale_report(
+    *,
+    reports_dir: Path,
+    filename: str,
+    reports: tuple[TradeRationaleReport, ...],
+) -> TradeRationaleReport | None:
+    if not filename:
+        return None
+    for report in reports:
+        if report.filename == filename:
+            return report
+    candidate = (reports_dir / filename).resolve()
+    try:
+        candidate.relative_to(reports_dir.resolve())
+    except ValueError:
+        return None
+    if not candidate.exists() or candidate.suffix != ".md":
+        return None
+    return _parse_trade_rationale_report(candidate)
 
 
 def _render_profile_run_shell_command(

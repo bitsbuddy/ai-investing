@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import os
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -17,9 +18,19 @@ from ai_investing.cli import (
     _run_multi_profile_setup_command,
     _run_paper_setup_command,
     _run_reset_account_command,
+    _write_trade_rationale_report,
 )
 from ai_investing.config import BrokerConfig, RuntimeConfig
-from ai_investing.models import ClockSnapshot
+from ai_investing.execution import ExecutionResult, RuntimeState
+from ai_investing.models import (
+    ClockSnapshot,
+    OfficialNewsContext,
+    OfficialNewsItem,
+    RebalanceAction,
+    ResearchAssessment,
+    Signal,
+    StrategyParameters,
+)
 
 
 class _FakeClockClient:
@@ -486,6 +497,113 @@ class CLITests(unittest.TestCase):
             validation_date = _resolve_research_validation_date(date(2026, 5, 15))
 
         self.assertEqual(validation_date, date(2026, 5, 17))
+
+    def test_write_trade_rationale_report_persists_trade_history_entry(self) -> None:
+        runtime_config = _runtime_config(
+            profile_name="Aggressive",
+            risk_profile="aggressive",
+        )
+        signal = Signal(
+            as_of=date(2026, 5, 21),
+            regime="risk_on",
+            weights={"SPY": 0.24, "QQQ": 0.18, "NVDA": 0.11},
+            diagnostics={
+                "selected_count": 3,
+                "selected_etf_count": 2,
+                "selected_equity_count": 1,
+            },
+            assessments={
+                "SPY": ResearchAssessment(
+                    symbol="SPY",
+                    total_score=0.62,
+                    research_score=0.58,
+                    component_scores={"quant": 0.55, "etf": 0.74, "index": 0.60},
+                    asset_type="etf",
+                    benchmark_index="SPX",
+                ),
+                "NVDA": ResearchAssessment(
+                    symbol="NVDA",
+                    total_score=0.78,
+                    research_score=0.71,
+                    component_scores={"quant": 0.81, "company": 0.69, "news": 0.66},
+                    asset_type="equity",
+                    sector="Technology",
+                ),
+            },
+            official_news=OfficialNewsContext(
+                as_of=date(2026, 5, 21),
+                lookback_days=7,
+                risk_on_score=0.55,
+                cash_score=0.42,
+                items=(
+                    OfficialNewsItem(
+                        source="fed",
+                        published_on=date(2026, 5, 21),
+                        title="Fed holds rates steady",
+                        url="https://example.test/fed",
+                        impact_scores={"risk_on": 0.55},
+                        summary="Policy unchanged with balanced language.",
+                    ),
+                ),
+                source_status={"fed": "ok"},
+            ),
+        )
+        actions = [
+            RebalanceAction(
+                side="buy",
+                symbol="SPY",
+                notional=24000.0,
+                qty=None,
+                reason="increase_or_enter",
+            ),
+            RebalanceAction(
+                side="buy",
+                symbol="NVDA",
+                notional=11000.0,
+                qty=None,
+                reason="increase_or_enter",
+            ),
+        ]
+        result = ExecutionResult(
+            actions=actions,
+            responses=[{"id": "order-1"}],
+            state=RuntimeState(high_water_mark=101500.0),
+            submitted_actions=actions,
+            skipped_messages=["Skipped QQQ because price drift exceeded limit."],
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            cwd_before = Path.cwd()
+            try:
+                os.chdir(root)
+                report_path = _write_trade_rationale_report(
+                    runtime_config=runtime_config,
+                    params=StrategyParameters(top_n=4, equity_count=6),
+                    signal=signal,
+                    result=result,
+                    submit=True,
+                    clock_timestamp="2026-05-21T12:30:00-04:00",
+                    execution_error=None,
+                )
+                resolved_report_path = (root / report_path).resolve()
+            finally:
+                os.chdir(cwd_before)
+
+            self.assertTrue(resolved_report_path.exists())
+            self.assertTrue(
+                resolved_report_path.parent.as_posix().endswith("/logs/trade-rationales")
+            )
+            contents = resolved_report_path.read_text()
+            self.assertIn("# Trade Rationale", contents)
+            self.assertIn("- Profile: Aggressive", contents)
+            self.assertIn("## Decision Summary", contents)
+            self.assertIn("## Target Portfolio", contents)
+            self.assertIn("## Official News Context", contents)
+            self.assertIn("## Selected Research", contents)
+            self.assertIn("## Submitted Basket", contents)
+            self.assertIn("## Skipped Actions", contents)
+            self.assertIn("SPY: 24.00%", contents)
 
 
 if __name__ == "__main__":
